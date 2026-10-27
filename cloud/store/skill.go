@@ -257,6 +257,57 @@ func (s *Store) ListDeviceSkillInstalls(skillName, version string, deviceIDs []s
 	return out, rows.Err()
 }
 
+// ListInstallsByDevice 某设备的装机记录（设备详情页：装了哪些 skill、什么版本）。
+func (s *Store) ListInstallsByDevice(deviceID string, limit int) ([]map[string]any, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.DB.Query(`SELECT d.skill_name, d.version, d.result,
+		COALESCE(v.signature,''), d.installed_at
+		FROM device_skill_install d
+		LEFT JOIN skill_version v ON v.id=d.skill_ver_id
+		WHERE d.device_id=? ORDER BY d.installed_at DESC LIMIT ?`, deviceID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var name, ver, result, installedAt string
+		var sig string
+		if err := rows.Scan(&name, &ver, &result, &sig, &installedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, map[string]any{"skill": name, "version": ver, "result": result,
+			"signed": sig != "", "installed_at": installedAt})
+	}
+	return out, rows.Err()
+}
+
+// CoverageBySkill 某 skill 的装机覆盖（skill 详情页：覆盖了多少机器、成功多少）。
+func (s *Store) CoverageBySkill(skillName string, limit int) ([]map[string]any, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	rows, err := s.DB.Query(`SELECT d.device_id, d.version, d.result, d.installed_at
+		FROM device_skill_install d WHERE d.skill_name=? ORDER BY d.installed_at DESC LIMIT ?`,
+		skillName, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var dev, ver, result, installedAt string
+		if err := rows.Scan(&dev, &ver, &result, &installedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, map[string]any{"device_id": dev, "version": ver,
+			"result": result, "installed_at": installedAt})
+	}
+	return out, rows.Err()
+}
+
 // ManifestOf 把版本行 manifest 还原为结构体。
 func (v *SkillVersionRow) ManifestOf() proto.Manifest {
 	var m proto.Manifest

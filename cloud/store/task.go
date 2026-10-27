@@ -67,8 +67,15 @@ func (s *Store) ListTasks(deviceID string, limit int) ([]*TaskRow, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := s.DB.Query(`SELECT `+taskCols+` FROM task WHERE device_id=? ORDER BY created_at DESC LIMIT ?`,
-		deviceID, limit)
+	q := `SELECT ` + taskCols + ` FROM task`
+	args := []any{}
+	if deviceID != "" {
+		q += ` WHERE device_id=?`
+		args = append(args, deviceID)
+	}
+	q += ` ORDER BY created_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.DB.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}

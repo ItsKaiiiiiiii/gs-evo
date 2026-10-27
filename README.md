@@ -64,7 +64,7 @@ http://<云端地址>/console/
 ```
 
 - 登录：粘贴 admin token（gsa_ 开头；gs-cloud 首启生成，或 `gs-cloud token create` 签发，viewer 角色自动只读）
-- 页面：设备（状态/标签/吊销）· Skill（版本状态机/diff 审阅/安装）· 任务（下发/事件流/取消）· 进化（基准/生成/评估/自动发布策略）· 报表
+- 页面（实体轴 IA，总览为着陆页）：**总览**（健康+客户端升级入口）· **设备**（实体详情：装机清单/指令历史/任务历史/标签/吊销）· **Skill**（实体详情：版本时间线=diff+rationale+评估历史+自动策略+覆盖率，生成/评估/安装动作内联）· **任务与操作**（一键扫描/获取 skill/探测 agent + 自定义任务）· **进化**（全局队列：BenchmarkSet + EvaluationRun）· **审计**（指令全量历史+操作者+token 管理）
 - 扩展：页面即模块——`cloud/console/static/js/pages/` 下加一个 js 文件并 `App.register(...)` 即成新页面，后端零改动
 
 ## Worker 自更新（无人上机操作）

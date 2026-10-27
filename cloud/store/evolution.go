@@ -271,3 +271,44 @@ func (s *Store) GetAdminTokenRole(hash string) (string, error) {
 	}
 	return role, nil
 }
+
+// ListRecentEvaluationRuns 全局最近的评估运行（进化页全局队列）。
+func (s *Store) ListRecentEvaluationRuns(limit int) ([]*EvaluationRunRow, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := s.DB.Query(`SELECT id, skill_name, skill_version, benchmark_set_id, status,
+		device_ids, metrics, verdict, created_by, created_at, finished_at FROM evaluation_run
+		ORDER BY created_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*EvaluationRunRow
+	for rows.Next() {
+		r, err := scanEvalRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ListAdminTokens token 清单（审计页；哈希不外露）。
+func (s *Store) ListAdminTokens() ([]AdminTokenRow, error) {
+	rows, err := s.DB.Query(`SELECT label, role, created_at FROM admin_token ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AdminTokenRow{}
+	for rows.Next() {
+		var t AdminTokenRow
+		if err := rows.Scan(&t.Label, &t.Role, &t.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}

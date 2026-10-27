@@ -282,7 +282,12 @@ func TestP2_OfflineSpoolReplay(t *testing.T) {
 		t.Fatalf("replay cmd %s result=%v", d2.Status, d2.Result)
 	}
 	t.Logf("replay result: %v (before=%d)", d2.dataOf(), before)
-	after := len(c.eventsOf(t, taskID, 0))
+	// replay 的事件帧经 WS 异步落库：轮询等待计数稳定，而非紧贴 acked 断言
+	after := before
+	waitFor(t, 10*time.Second, "replayed events stored", func() (bool, error) {
+		after = len(c.eventsOf(t, taskID, 0))
+		return after > before, nil
+	})
 	if after <= before {
 		dump := []string{}
 		for _, ev := range c.eventsOf(t, taskID, 0) {

@@ -174,14 +174,21 @@ func (s *Store) GetCommand(cmdID string) (*Command, error) {
 	return c, err
 }
 
-// ListCommands 审计查询。
+// ListCommands 审计查询；deviceID 为空 = 跨设备全局查询（审计页）。
 func (s *Store) ListCommands(deviceID string, limit int) ([]*Command, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := s.DB.Query(`SELECT id, cmd_seq, device_id, cmd_type, payload, status, created_by,
-		result, issued_at, expires_at, acked_at, result_at FROM command
-		WHERE device_id=? ORDER BY cmd_seq DESC LIMIT ?`, deviceID, limit)
+	q := `SELECT id, cmd_seq, device_id, cmd_type, payload, status, created_by,
+		result, issued_at, expires_at, acked_at, result_at FROM command`
+	args := []any{}
+	if deviceID != "" {
+		q += ` WHERE device_id=?`
+		args = append(args, deviceID)
+	}
+	q += ` ORDER BY issued_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.DB.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}

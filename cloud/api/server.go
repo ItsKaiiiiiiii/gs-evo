@@ -169,6 +169,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/admin/tasks/{id}/cancel", s.authAdmin(s.handleTaskCancel))
 	mux.HandleFunc("POST /api/v1/admin/devices/{id}/disconnect", s.authAdmin(s.handleDisconnectDevice))
 	mux.HandleFunc("POST /api/v1/admin/devices/{id}/labels", s.authAdmin(s.handleSetDeviceLabels))
+	mux.HandleFunc("GET /api/v1/admin/devices/{id}/installs", s.authAny(s.handleDeviceInstalls))
+	mux.HandleFunc("GET /api/v1/admin/skills/{name}/coverage", s.authAny(s.handleSkillCoverage))
+	mux.HandleFunc("GET /api/v1/admin/evaluations", s.authAny(s.handleRecentEvaluations))
+	mux.HandleFunc("GET /api/v1/admin/tokens", s.authAny(s.handleListTokens))
 	return mux
 }
 
@@ -572,6 +576,49 @@ func (s *Server) handleSetDeviceLabels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": d.ID, "labels": d.Labels})
+}
+
+// handleDeviceInstalls 设备详情：装机清单（评审问题 5）。
+func (s *Server) handleDeviceInstalls(w http.ResponseWriter, r *http.Request) {
+	installs, err := s.st.ListInstallsByDevice(r.PathValue("id"), 200)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, installs)
+}
+
+// handleSkillCoverage skill 覆盖（评审问题 6）。
+func (s *Server) handleSkillCoverage(w http.ResponseWriter, r *http.Request) {
+	cov, err := s.st.CoverageBySkill(r.PathValue("name"), 200)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, cov)
+}
+
+// handleRecentEvaluations 全局评估队列（进化页降级为全局队列）。
+func (s *Server) handleRecentEvaluations(w http.ResponseWriter, r *http.Request) {
+	runs, err := s.st.ListRecentEvaluationRuns(atoiDefault(r.URL.Query().Get("limit"), 50))
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if runs == nil {
+		runs = []*store.EvaluationRunRow{}
+	}
+	writeJSON(w, http.StatusOK, runs)
+}
+
+// handleListTokens token 清单（审计页；哈希不外露）。
+func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
+	tokens, err := s.st.ListAdminTokens()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, tokens)
 }
 
 func (s *Server) loadPending(deviceID string) ([]*store.Command, error) {
