@@ -28,6 +28,12 @@ func (e *Engine) handleClientUpdate(ctx context.Context, payload map[string]any)
 	if e.Cfg.SigningPubkey == "" {
 		return nil, errors.New("no signing_pubkey configured — refusing update")
 	}
+	// 同版本短路：按发布纪律版本号递增，同版本无需重复升级
+	if p.Version == WorkerVersion {
+		data, _ := structToMap(map[string]any{
+			"updated": false, "already_up_to_date": true, "version": p.Version})
+		return data, nil
+	}
 	// 下载 + sha256 校验
 	blob, err := e.downloadBundle(ctx, p.URL)
 	if err != nil {
@@ -76,10 +82,12 @@ func (e *Engine) handleClientUpdate(ctx context.Context, payload map[string]any)
 	if err := swapBinary(exe, stagedBin); err != nil {
 		return nil, fmt.Errorf("swap binary: %w", err)
 	}
-	e.Log.Info("client updated", "version", p.Version, "binary", exe)
+	e.Log.Info("client updated, restarting into new binary", "version", p.Version, "binary", exe)
+	// 自动生效（用户条件：云端下发、worker 自己完成升级，无需上机操作）：
+	//   已注册自启 → 退出交服务管理器拉起；POSIX 未注册 → syscall.Exec 原地接管
+	restartNote := e.RestartIntoSelf(exe)
 	data, _ := structToMap(map[string]any{
-		"updated": true, "version": p.Version,
-		"restart_required": true, // v1 不自动退出：由自启机制/人工重启拉起新版
+		"updated": true, "version": p.Version, "restart": restartNote,
 	})
 	return data, nil
 }

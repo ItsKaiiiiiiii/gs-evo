@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -205,10 +206,17 @@ func (s *Server) handleAutoPolicy(w http.ResponseWriter, r *http.Request) {
 // ---- client.update（P4 自更新）----
 
 // handlePushClientRelease 上传新 worker 二进制（admin 通道直传，服务端打包+签名+登记）。
+// release 按 (version, os, arch) 三元组发布；rollout 时按设备平台精确匹配。
 func (s *Server) handlePushClientRelease(w http.ResponseWriter, r *http.Request) {
 	version := r.PathValue("version")
 	if version == "" {
 		writeErr(w, http.StatusBadRequest, "version required")
+		return
+	}
+	osName := r.URL.Query().Get("os")
+	arch := r.URL.Query().Get("arch")
+	if osName == "" || arch == "" {
+		writeErr(w, http.StatusBadRequest, "os and arch query params required (e.g. ?os=linux&arch=amd64)")
 		return
 	}
 	bin, err := io.ReadAll(io.LimitReader(r.Body, 512<<20))
@@ -236,8 +244,8 @@ func (s *Server) handlePushClientRelease(w http.ResponseWriter, r *http.Request)
 		writeErr(w, 500, err.Error())
 		return
 	}
-	rel := &store.ClientReleaseRow{Version: version, SHA256: sum, Size: int64(len(blob)),
-		Notes: r.URL.Query().Get("notes")}
+	rel := &store.ClientReleaseRow{Version: version, OS: osName, Arch: arch,
+		SHA256: sum, Size: int64(len(blob)), Notes: r.URL.Query().Get("notes")}
 	if err := s.st.CreateClientRelease(rel); err != nil {
 		writeErr(w, 500, err.Error())
 		return
@@ -256,11 +264,6 @@ func (s *Server) handleClientUpdateRollout(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusBadRequest, "version required")
 		return
 	}
-	rel, err := s.st.GetClientRelease(req.Version)
-	if err != nil || rel == nil {
-		writeErr(w, http.StatusNotFound, "release not found")
-		return
-	}
 	targets, err := s.svc.ResolveDevices(req.DeviceIDs, req.Labels)
 	if err != nil {
 		writeErr(w, 500, err.Error())
@@ -270,17 +273,32 @@ func (s *Server) handleClientUpdateRollout(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusBadRequest, "no matching devices")
 		return
 	}
-	sig, err := skillpkg.SignUpdate(s.privHex, rel.SHA256)
-	if err != nil {
-		writeErr(w, 500, err.Error())
-		return
-	}
 	type issued struct {
-		Device string `json:"device_id"`
-		CmdID  string `json:"cmd_id"`
+		Device  string `json:"device_id"`
+		CmdID   string `json:"cmd_id"`
+		OS      string `json:"os"`
+		Arch    string `json:"arch"`
+		Skipped string `json:"skipped,omitempty"` // 无匹配平台 release 时的原因
 	}
 	out := []issued{}
 	for _, dev := range targets {
+		// 按设备平台精确匹配 release（跨平台群发不发错二进制）
+		rel, err := s.st.GetClientRelease(req.Version, dev.OS, dev.Arch)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		if rel == nil {
+			out = append(out, issued{Device: dev.ID, OS: dev.OS, Arch: dev.Arch,
+				Skipped: fmt.Sprintf("no release %s for %s/%s（用 client-update push --os %s --arch %s 补传）",
+					req.Version, dev.OS, dev.Arch, dev.OS, dev.Arch)})
+			continue
+		}
+		sig, err := skillpkg.SignUpdate(s.privHex, rel.SHA256)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
 		url, err := s.deviceTicketDownloadURL(r.Context(), dev.ID, rel.SHA256)
 		if err != nil {
 			writeErr(w, 500, err.Error())
@@ -296,7 +314,7 @@ func (s *Server) handleClientUpdateRollout(w http.ResponseWriter, r *http.Reques
 			writeErr(w, 500, err.Error())
 			return
 		}
-		out = append(out, issued{Device: dev.ID, CmdID: cmd.ID})
+		out = append(out, issued{Device: dev.ID, CmdID: cmd.ID, OS: dev.OS, Arch: dev.Arch})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

@@ -623,13 +623,15 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type devView struct {
-		ID        string   `json:"id"`
-		Hostname  string   `json:"hostname"`
-		OS        string   `json:"os"`
-		Status    string   `json:"status"`
-		LastSeen  string   `json:"last_seen,omitempty"`
-		LastAcked int64    `json:"last_acked_cmd_seq"`
-		Labels    []string `json:"labels"`
+		ID            string   `json:"id"`
+		Hostname      string   `json:"hostname"`
+		OS            string   `json:"os"`
+		Arch          string   `json:"arch"`
+		WorkerVersion string   `json:"worker_version"`
+		Status        string   `json:"status"`
+		LastSeen      string   `json:"last_seen,omitempty"`
+		LastAcked     int64    `json:"last_acked_cmd_seq"`
+		Labels        []string `json:"labels"`
 	}
 	out := make([]devView, 0, len(devs))
 	for _, d := range devs {
@@ -637,7 +639,8 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 		if labels == nil {
 			labels = []string{}
 		}
-		v := devView{ID: d.ID, Hostname: d.Hostname, OS: d.OS, Status: d.Status, LastAcked: d.LastAckedCmdSeq, Labels: labels}
+		v := devView{ID: d.ID, Hostname: d.Hostname, OS: d.OS, Arch: d.Arch,
+			WorkerVersion: d.WorkerVersion, Status: d.Status, LastAcked: d.LastAckedCmdSeq, Labels: labels}
 		if d.LastSeen != nil {
 			v.LastSeen = d.LastSeen.UTC().Format(time.RFC3339)
 		}

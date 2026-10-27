@@ -252,7 +252,7 @@ func TestP4_ClientUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer upBody.Close()
-	resp, err := c.adminUpload("POST", "/api/v1/admin/client-releases/v-test?notes=e2e", upBody)
+	resp, err := c.adminUpload("POST", "/api/v1/admin/client-releases/v-test?os=linux&arch=amd64&notes=e2e", upBody)
 	if err != nil {
 		t.Fatal(err)
 	}

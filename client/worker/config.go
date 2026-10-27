@@ -12,7 +12,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-const WorkerVersion = "0.1.0"
+var WorkerVersion = "0.1.0"
 
 // Config config.toml（白名单主权在本地，D10；云端 policies 只能收紧）。
 type Config struct {

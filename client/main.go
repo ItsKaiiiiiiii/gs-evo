@@ -59,6 +59,8 @@ func main() {
 		err = cmdSkills(home, args[1:])
 	case "probe":
 		err = cmdProbe(home)
+	case "autostart":
+		err = cmdAutostart(home, args[1:])
 	default:
 		usage()
 		os.Exit(2)
@@ -82,6 +84,9 @@ commands:
   probe                        探测本机可用的 coding agent
   skills list                  列出白名单目录中的 skill
   skills rollback NAME         回滚到上一版本（.prev）
+  autostart enable|disable|status
+                               注册/注销开机自启（systemd/LaunchAgent/计划任务；
+                               升级自动生效与崩溃拉起都依赖它）
 `)
 }
 
@@ -226,6 +231,34 @@ func cmdSkills(home worker.Home, args []string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown skills subcommand %q", args[0])
+}
+
+func cmdAutostart(home worker.Home, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: gs-worker autostart enable|disable|status")
+	}
+	switch args[0] {
+	case "enable":
+		note, err := worker.AutostartEnable(home)
+		if note != "" {
+			fmt.Println(note)
+		}
+		return err
+	case "disable":
+		note, err := worker.AutostartDisable()
+		if note != "" {
+			fmt.Println(note)
+		}
+		return err
+	case "status":
+		if worker.AutostartEnabled() {
+			fmt.Println("已注册自启（升级自动生效 / 崩溃自动拉起）")
+		} else {
+			fmt.Println("未注册自启（升级后需手动重启 daemon 才能生效的场景：Windows）")
+		}
+		return nil
+	}
+	return fmt.Errorf("unknown autostart subcommand %q", args[0])
 }
 
 func cmdProbe(home worker.Home) error {

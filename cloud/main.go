@@ -16,7 +16,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -926,6 +928,8 @@ func cmdClientUpdate(args []string) error {
 	version := fs.String("version", "", "release version")
 	file := fs.String("file", "", "worker binary path")
 	notes := fs.String("notes", "", "release notes")
+	pushOS := fs.String("os", runtime.GOOS, "target OS (push 用，默认当前平台)")
+	pushArch := fs.String("arch", runtime.GOARCH, "target arch (push 用，默认当前平台)")
 	var devices, labels sliceFlags
 	fs.Var(&devices, "device", "device id (repeatable)")
 	fs.Var(&labels, "label", "label (repeatable)")
@@ -937,6 +941,8 @@ func cmdClientUpdate(args []string) error {
 		if *version == "" || *file == "" {
 			return fmt.Errorf("--version and --file required")
 		}
+		goos := *pushOS
+		goarch := *pushArch
 		base := env("GSEVO_URL", "http://127.0.0.1:8080")
 		token := os.Getenv("GSEVO_ADMIN_TOKEN")
 		if token == "" {
@@ -951,7 +957,12 @@ func cmdClientUpdate(args []string) error {
 			return err
 		}
 		defer f.Close()
-		req, err := http.NewRequest("POST", base+"/api/v1/admin/client-releases/"+*version+"?notes="+*notes, f)
+		q := url.Values{}
+		q.Set("os", goos)
+		q.Set("arch", goarch)
+		q.Set("notes", *notes)
+		req, err := http.NewRequest("POST",
+			base+"/api/v1/admin/client-releases/"+*version+"?"+q.Encode(), f)
 		if err != nil {
 			return err
 		}

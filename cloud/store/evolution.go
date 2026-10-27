@@ -215,6 +215,8 @@ func (s *Store) SetVersionRationale(skillName, version, rationale string) error 
 
 type ClientReleaseRow struct {
 	Version   string    `json:"version"`
+	OS        string    `json:"os"`
+	Arch      string    `json:"arch"`
 	SHA256    string    `json:"sha256"`
 	Size      int64     `json:"size"`
 	Notes     string    `json:"notes,omitempty"`
@@ -222,29 +224,22 @@ type ClientReleaseRow struct {
 }
 
 func (s *Store) CreateClientRelease(r *ClientReleaseRow) error {
-	_, err := s.DB.Exec(`INSERT INTO client_release (version, sha256, size, notes) VALUES (?,?,?,?)`,
-		r.Version, r.SHA256, r.Size, r.Notes)
+	_, err := s.DB.Exec(`INSERT INTO client_release (version, os, arch, sha256, size, notes)
+		VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE sha256=VALUES(sha256), size=VALUES(size), notes=VALUES(notes)`,
+		r.Version, r.OS, r.Arch, r.SHA256, r.Size, r.Notes)
 	return err
 }
 
-func (s *Store) GetClientRelease(version string) (*ClientReleaseRow, error) {
+// GetClientRelease 精确平台匹配（rollout 按设备 os/arch 下发）。
+func (s *Store) GetClientRelease(version, osName, arch string) (*ClientReleaseRow, error) {
 	var r ClientReleaseRow
-	err := s.DB.QueryRow(`SELECT version, sha256, size, notes, created_at FROM client_release WHERE version=?`,
-		version).Scan(&r.Version, &r.SHA256, &r.Size, &r.Notes, &r.CreatedAt)
+	err := s.DB.QueryRow(`SELECT version, os, arch, sha256, size, notes, created_at FROM client_release
+		WHERE version=? AND os=? AND arch=?`, version, osName, arch).
+		Scan(&r.Version, &r.OS, &r.Arch, &r.SHA256, &r.Size, &r.Notes, &r.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	return &r, err
-}
-
-func (s *Store) LatestClientRelease() (*ClientReleaseRow, error) {
-	r := new(ClientReleaseRow)
-	err := s.DB.QueryRow(`SELECT version, sha256, size, notes, created_at FROM client_release
-		ORDER BY created_at DESC LIMIT 1`).Scan(&r.Version, &r.SHA256, &r.Size, &r.Notes, &r.CreatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	return r, err
 }
 
 // ---- RBAC：admin token 角色 ----

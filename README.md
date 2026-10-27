@@ -67,6 +67,18 @@ http://<云端地址>/console/
 - 页面：设备（状态/标签/吊销）· Skill（版本状态机/diff 审阅/安装）· 任务（下发/事件流/取消）· 进化（基准/生成/评估/自动发布策略）· 报表
 - 扩展：页面即模块——`cloud/console/static/js/pages/` 下加一个 js 文件并 `App.register(...)` 即成新页面，后端零改动
 
+## Worker 自更新（无人上机操作）
+
+```
+# 云端：发布（按平台）+ 一键下发
+gs-cloud client-update push --version v0.2.0 --file ./gs-worker --os linux --arch amd64
+gs-cloud client-update rollout --version v0.2.0 --label env:all   # 按设备平台自动匹配 release
+```
+
+worker 收到指令后自动完成：下载（一次性票据 URL）→ sha256 校验 → ed25519 验签 → 原子替换自身（`.old` 留一代可回退）→ **自动重启进新版本**（已注册自启则交服务管理器拉起；POSIX 未注册则原地 exec 接管）→ 重连云端并上报新版本。全程无需登录用户机器。
+
+建议 worker 侧执行一次 `gs-worker autostart enable`（systemd user unit / LaunchAgent / 计划任务），获得开机自启与崩溃自动拉起。
+
 ## 快速开始（开发）
 
 依赖：Go ≥ 1.23、MySQL 8（库与用户自建）。
