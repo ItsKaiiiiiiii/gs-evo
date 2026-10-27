@@ -197,12 +197,16 @@ type InstallPayload struct {
 	Signature  string `json:"signature"` // ed25519 hex，对 "gs-evo-bundle-v1:"+sha256 签名
 	TargetRoot string `json:"target_root"`
 	OnConflict string `json:"on_conflict,omitempty"` // skip(默认) | overwrite
+
+	// 评估灰度安装留痕（client 原样回传；cloud 侧受控例外，普通 install 为空）
+	EvaluationRunID string `json:"evaluation_run_id,omitempty"`
 }
 type InstallResult struct {
-	Name      string `json:"name"`
-	Result    string `json:"result"` // installed | conflict_skipped
-	Installed string `json:"installed,omitempty"`
-	Replaced  string `json:"replaced,omitempty"` // 上一版本号，无则 "none"
+	Name            string `json:"name"`
+	Result          string `json:"result"` // installed | conflict_skipped
+	Installed       string `json:"installed,omitempty"`
+	Replaced        string `json:"replaced,omitempty"` // 上一版本号，无则 "none"
+	EvaluationRunID string `json:"evaluation_run_id,omitempty"`
 }
 
 // bundle 一次性票据（REST，见 §6.6/§6.7）

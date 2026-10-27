@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/ItsKaiiiiiiii/gs-evo/cloud/auth"
+	"github.com/ItsKaiiiiiiii/gs-evo/cloud/evo"
 	"github.com/ItsKaiiiiiiii/gs-evo/cloud/gateway"
 	"github.com/ItsKaiiiiiiii/gs-evo/cloud/skillsvc"
 	"github.com/ItsKaiiiiiiii/gs-evo/cloud/store"
@@ -46,6 +47,7 @@ type Server struct {
 	verifier *auth.Verifier
 	gw       *gateway.Gateway
 	svc      *skillsvc.Service
+	evo      *evo.Engine
 	log      *slog.Logger
 	privHex  string
 	pubHex   string
@@ -103,6 +105,7 @@ func NewServer(cfg Config, st *store.Store, log *slog.Logger) (*Server, error) {
 	s.gw.OnResult = s.onCmdResult
 	s.gw.OnTaskEvent = s.onTaskEvent
 	s.gw.LoadPend = s.loadPending
+	s.setupEvolution()
 	return s, nil
 }
 
@@ -124,7 +127,7 @@ func (s *Server) Routes() http.Handler {
 
 	// 管理面（gsa_ Bearer）
 	mux.HandleFunc("POST /api/v1/admin/enroll-tokens", s.authAdmin(s.handleCreateEnroll))
-	mux.HandleFunc("GET /api/v1/admin/devices", s.authAdmin(s.handleListDevices))
+	mux.HandleFunc("GET /api/v1/admin/devices", s.authAny(s.handleListDevices))
 	mux.HandleFunc("POST /api/v1/admin/devices/{id}/revoke", s.authAdmin(s.handleRevokeDevice))
 	mux.HandleFunc("POST /api/v1/admin/commands", s.authAdmin(s.handleCreateCommand))
 	mux.HandleFunc("GET /api/v1/admin/commands", s.authAdmin(s.handleListCommands))
@@ -134,13 +137,29 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/admin/skills/{name}/install", s.authAdmin(s.handleInstall))
 	mux.HandleFunc("GET /api/v1/admin/key", s.authAdmin(s.handleKey))
 
+	// 进化面（P3）
+	mux.HandleFunc("POST /api/v1/admin/benchmarks", s.authAdmin(s.handleCreateBenchmark))
+	mux.HandleFunc("GET /api/v1/admin/benchmarks", s.authAny(s.handleListBenchmarks))
+	mux.HandleFunc("GET /api/v1/admin/benchmarks/{id}", s.authAny(s.handleGetBenchmark))
+	mux.HandleFunc("POST /api/v1/admin/skills/{name}/evolve", s.authAdmin(s.handleEvolve))
+	mux.HandleFunc("POST /api/v1/admin/skills/{name}/evaluate", s.authAdmin(s.handleEvaluate))
+	mux.HandleFunc("GET /api/v1/admin/skills/{name}/versions/{version}/runs", s.authAny(s.handleListRuns))
+	mux.HandleFunc("GET /api/v1/admin/skills/{name}/versions/{version}/diff", s.authAny(s.handleVersionDiff))
+	mux.HandleFunc("POST /api/v1/admin/skills/{name}/auto-policy", s.authAdmin(s.handleAutoPolicy))
+
+	// 运营面（P4）
+	mux.HandleFunc("POST /api/v1/admin/client-releases/{version}", s.authAdmin(s.handlePushClientRelease))
+	mux.HandleFunc("POST /api/v1/admin/client-update/rollout", s.authAdmin(s.handleClientUpdateRollout))
+	mux.HandleFunc("GET /api/v1/admin/report/summary", s.authAny(s.handleReport))
+	mux.HandleFunc("POST /api/v1/admin/tokens", s.authAdmin(s.handleCreateAdminToken))
+	mux.HandleFunc("POST /api/v1/admin/maintenance", s.authAdmin(s.handleMaintenance))
+
 	// 任务面（P2）
 	mux.HandleFunc("POST /api/v1/admin/tasks", s.authAdmin(s.handleCreateTask))
 	mux.HandleFunc("GET /api/v1/admin/tasks", s.authAdmin(s.handleListTasks))
 	mux.HandleFunc("GET /api/v1/admin/tasks/{id}/events", s.authAdmin(s.handleTaskEvents))
 	mux.HandleFunc("POST /api/v1/admin/tasks/{id}/cancel", s.authAdmin(s.handleTaskCancel))
 	mux.HandleFunc("POST /api/v1/admin/devices/{id}/disconnect", s.authAdmin(s.handleDisconnectDevice))
-	mux.HandleFunc("POST /api/v1/admin/maintenance", s.authAdmin(s.handleMaintenance))
 	return mux
 }
 
@@ -156,6 +175,17 @@ func (s *Server) authDevice(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), deviceCtxKey{}, d)))
+	}
+}
+
+// authAny admin 或 viewer（只读端点用；写操作仍走 authAdmin）。
+func (s *Server) authAny(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.verifier.VerifyAdminRole(r.Context(), r.Header.Get("Authorization")) == "" {
+			writeErr(w, http.StatusUnauthorized, "invalid admin token")
+			return
+		}
+		next(w, r)
 	}
 }
 
@@ -654,7 +684,7 @@ func (s *Server) handleInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cmds, err := s.svc.CreateInstallCommands(r.Context(), r.PathValue("name"), req.Version,
-		req.TargetRoot, req.OnConflict, "admin", req.DeviceIDs, req.Labels)
+		req.TargetRoot, req.OnConflict, "admin", req.DeviceIDs, req.Labels, "")
 	if errors.Is(err, skillsvc.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "skill or version not found")
 		return

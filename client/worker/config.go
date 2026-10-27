@@ -25,6 +25,7 @@ type Config struct {
 	MaxConcurrency int    `toml:"max_concurrency"`
 	SigningPubkey  string `toml:"signing_pubkey"` // ed25519 hex（装 stable 包必填，D8）
 	AgentPath      string `toml:"agent_path"`     // agent 二进制显式路径（测试/非 PATH 安装）
+	UpdateStub     bool   `toml:"update_stub"`    // true: 自更新只下载验签落盘，不替换自身（测试）
 
 	PermissionMode string `toml:"permission_mode"` // P2 生效，预置 readonly
 	RequireConfirm bool   `toml:"require_confirm"` // P2 生效，预置 false

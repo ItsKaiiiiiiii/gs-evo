@@ -98,14 +98,22 @@ func (v *Verifier) VerifyDevice(ctx context.Context, bearer string) *store.Devic
 	return d
 }
 
-// VerifyAdmin 校验 Bearer admin token。
-func (v *Verifier) VerifyAdmin(ctx context.Context, bearer string) bool {
+// VerifyAdminRole 校验 Bearer admin token，返回角色（""=无效；admin=全权；viewer=只读）。
+func (v *Verifier) VerifyAdminRole(ctx context.Context, bearer string) string {
 	token := strings.TrimPrefix(bearer, "Bearer ")
 	if !strings.HasPrefix(token, proto.TokenPrefixAdmin) {
-		return false
+		return ""
 	}
-	ok, err := v.store.GetAdminToken(proto.HashToken(token))
-	return err == nil && ok
+	role, err := v.store.GetAdminTokenRole(proto.HashToken(token))
+	if err != nil {
+		return ""
+	}
+	return role
+}
+
+// VerifyAdmin 校验 Bearer admin token（全权）。
+func (v *Verifier) VerifyAdmin(ctx context.Context, bearer string) bool {
+	return v.VerifyAdminRole(ctx, bearer) == "admin"
 }
 
 // RevokeDevice 吊销：库内失效 + 缓存失效（调用方负责踢线）。

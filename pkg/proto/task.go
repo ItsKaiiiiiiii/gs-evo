@@ -66,6 +66,15 @@ type TaskResult struct {
 	Artifacts  []string `json:"artifacts,omitempty"` // 工作目录内产物相对路径（v1 预留）
 }
 
+// ---- client.update（P4 自更新）----
+
+type ClientUpdatePayload struct {
+	Version   string `json:"version"`
+	URL       string `json:"url"` // 一次性票据 URL（tar.gz，内含新 worker 二进制）
+	SHA256    string `json:"sha256"`
+	Signature string `json:"signature"` // ed25519("gs-evo-update-v1:"+sha256)
+}
+
 // ---- task.cancel / task.events_replay ----
 
 type TaskCancelPayload struct {

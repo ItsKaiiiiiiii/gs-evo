@@ -57,3 +57,31 @@ func decodePriv(privHex string) (ed25519.PrivateKey, error) {
 	}
 	return ed25519.PrivateKey(b), nil
 }
+
+// UpdateSignatureDomain 客户端自更新包的签名域（与 skill 包区分）。
+const UpdateSignatureDomain = "gs-evo-update-v1:"
+
+// SignUpdate 对自更新包 sha256 签名。
+func SignUpdate(privHex, sha256Hex string) (string, error) {
+	priv, err := decodePriv(privHex)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(ed25519.Sign(priv, []byte(UpdateSignatureDomain+sha256Hex))), nil
+}
+
+// VerifyUpdate client 侧验自更新包签名。
+func VerifyUpdate(pubHex, sha256Hex, sigHex string) error {
+	pub, err := hex.DecodeString(pubHex)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return fmt.Errorf("bad public key")
+	}
+	sig, err := hex.DecodeString(sigHex)
+	if err != nil || len(sig) != ed25519.SignatureSize {
+		return fmt.Errorf("bad signature")
+	}
+	if !ed25519.Verify(ed25519.PublicKey(pub), []byte(UpdateSignatureDomain+sha256Hex), sig) {
+		return fmt.Errorf("update signature verify failed")
+	}
+	return nil
+}

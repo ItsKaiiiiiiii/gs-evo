@@ -39,6 +39,7 @@ type SkillVersionRow struct {
 	Source        string          `json:"source"`
 	ParentVersion string          `json:"parent_version,omitempty"`
 	Status        string          `json:"status"`
+	Rationale     string          `json:"rationale,omitempty"`
 	CreatedAt     sql.NullTime    `json:"created_at"`
 }
 
@@ -131,16 +132,17 @@ func uuidBytes(u string) []byte {
 }
 
 const svCols = `v.id, v.skill_id, s.name, v.version, v.manifest, v.content_sha256, v.size,
-	v.signature, v.origin_device, v.source, v.parent_version, v.status, v.created_at`
+	v.signature, v.origin_device, v.source, v.parent_version, v.rationale, v.status, v.created_at`
 
 func scanVersion(row interface{ Scan(...any) error }) (*SkillVersionRow, error) {
 	var v SkillVersionRow
 	var id, skillID []byte
-	var sig, origin, parent sql.NullString
+	var sig, origin, parent, rationale sql.NullString
 	if err := row.Scan(&id, &skillID, &v.SkillName, &v.Version, &v.Manifest, &v.ContentSHA256, &v.Size,
-		&sig, &origin, &v.Source, &parent, &v.Status, &v.CreatedAt); err != nil {
+		&sig, &origin, &v.Source, &parent, &rationale, &v.Status, &v.CreatedAt); err != nil {
 		return nil, err
 	}
+	v.Rationale = rationale.String
 	v.ID = BytesToUUID(id)
 	v.SkillID = BytesToUUID(skillID)
 	v.Signature = sig.String
@@ -205,8 +207,8 @@ func nilIfEmpty(s string) any {
 	return s
 }
 
-// RecordInstall 落 DeviceSkillInstall（§8）。
-func (s *Store) RecordInstall(deviceID string, v *SkillVersionRow, result, prevVersion string) error {
+// RecordInstall 落 DeviceSkillInstall（§8）；evaluationRunID 非空表示评估用途的受控安装。
+func (s *Store) RecordInstall(deviceID string, v *SkillVersionRow, result, prevVersion, evaluationRunID string) error {
 	var prev any
 	if prevVersion != "" {
 		prevRow, err := s.GetVersion(v.SkillName, prevVersion)
@@ -214,10 +216,45 @@ func (s *Store) RecordInstall(deviceID string, v *SkillVersionRow, result, prevV
 			prev = uuidBytes(prevRow.ID)
 		}
 	}
+	var run any
+	if evaluationRunID != "" {
+		run = evaluationRunID
+	}
 	_, err := s.DB.Exec(`INSERT INTO device_skill_install
-		(device_id, skill_ver_id, skill_name, version, result, prev_ver_id) VALUES (?,?,?,?,?,?)`,
-		deviceID, uuidBytes(v.ID), v.SkillName, v.Version, result, prev)
+		(device_id, skill_ver_id, skill_name, version, result, prev_ver_id, evaluation_run_id) VALUES (?,?,?,?,?,?,?)`,
+		deviceID, uuidBytes(v.ID), v.SkillName, v.Version, result, prev, run)
 	return err
+}
+
+// ListDeviceSkillInstalls 查询指定设备集上某版本的安装记录（评估灰度等待用）。
+func (s *Store) ListDeviceSkillInstalls(skillName, version string, deviceIDs []string) ([]map[string]any, error) {
+	if len(deviceIDs) == 0 {
+		return nil, nil
+	}
+	q := `SELECT device_id, result FROM device_skill_install WHERE skill_name=? AND version=? AND device_id IN (`
+	args := []any{skillName, version}
+	for i, d := range deviceIDs {
+		if i > 0 {
+			q += ","
+		}
+		q += "?"
+		args = append(args, d)
+	}
+	q += `)`
+	rows, err := s.DB.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []map[string]any
+	for rows.Next() {
+		var dev, result string
+		if err := rows.Scan(&dev, &result); err != nil {
+			return nil, err
+		}
+		out = append(out, map[string]any{"device_id": dev, "result": result})
+	}
+	return out, rows.Err()
 }
 
 // ManifestOf 把版本行 manifest 还原为结构体。

@@ -207,7 +207,7 @@ func (e *Engine) handleInstall(ctx context.Context, payload map[string]any) (map
 		return nil, fmt.Errorf("signature: %w", err)
 	}
 	// 4. 冲突检测：磁盘 hash vs state.json 记录（C6）
-	ir := proto.InstallResult{Name: p.Name}
+	ir := proto.InstallResult{Name: p.Name, EvaluationRunID: p.EvaluationRunID}
 	prev := "none"
 	if rec, exists := e.State.Installed[p.Name]; exists {
 		prev = rec.Version
@@ -260,9 +260,14 @@ func (e *Engine) handleInstall(ctx context.Context, payload map[string]any) (map
 	ir.Result = "installed"
 	ir.Installed = p.Version
 	ir.Replaced = prev
-	// 6. 回写 state.json
+	// 6. 回写 state.json：content_hash 记录【解压后目录内容哈希】
+	//    （冲突检测比对的是磁盘目录，二者必须同源；bundle sha 仅用于传输校验）
+	dirHash, herr := skillHashDir(target)
+	if herr != nil {
+		return nil, fmt.Errorf("hash installed dir: %w", herr)
+	}
 	e.mu.Lock()
-	e.State.Installed[p.Name] = InstalledRec{Version: p.Version, ContentHash: p.SHA256, InstalledAt: nowRFC3339()}
+	e.State.Installed[p.Name] = InstalledRec{Version: p.Version, ContentHash: dirHash, InstalledAt: nowRFC3339()}
 	e.Home.SaveState(e.State)
 	e.mu.Unlock()
 

@@ -20,6 +20,7 @@ import (
 )
 
 var mockAgentPath string
+var workerBinPath string
 
 func buildMockAgent() {
 	out := filepath.Join(os.TempDir(), "gsevo-mockagent")
@@ -30,6 +31,17 @@ func buildMockAgent() {
 		return
 	}
 	mockAgentPath = out
+}
+
+func buildWorkerBinary() {
+	out := filepath.Join(os.TempDir(), "gsevo-gs-worker")
+	cmd := exec.Command("go", "build", "-o", out, "./client")
+	cmd.Dir = repoRoot()
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "build worker:", err)
+		return
+	}
+	workerBinPath = out
 }
 
 func repoRoot() string {

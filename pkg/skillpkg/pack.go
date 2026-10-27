@@ -4,6 +4,7 @@ package skillpkg
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -183,4 +184,119 @@ func RenameWithRetry(oldPath, newPath string, attempts int) error {
 		time.Sleep(time.Duration(i+1) * 300 * time.Millisecond)
 	}
 	return err
+}
+
+// ExtractFile 从 tar.gz bundle 中提取单个文件内容（用于 diff/审阅，§7.5）。
+func ExtractFile(bundlePath, name string) ([]byte, error) {
+	f, err := os.Open(bundlePath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, err
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return nil, os.ErrNotExist
+		}
+		if err != nil {
+			return nil, err
+		}
+		if filepath.Clean(hdr.Name) == filepath.Clean(name) {
+			return io.ReadAll(tr)
+		}
+	}
+}
+
+// RepackWithSkillMD 解开 src bundle，用 newSkillMD 替换其中的 entry 文件后重打包。
+// 返回新 bundle 字节。用于进化候选生成（§7.5 ③）。
+func RepackWithSkillMD(srcPath, entry, newSkillMD string) ([]byte, string, error) {
+	f, err := os.Open(srcPath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, "", err
+	}
+	tr := tar.NewReader(gz)
+
+	var out bytes.Buffer
+	h := sha256.New()
+	gzw := gzip.NewWriter(io.MultiWriter(&out, h))
+	tw := tar.NewWriter(gzw)
+
+	replaced := false
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, "", err
+		}
+		content, err := io.ReadAll(tr)
+		if err != nil {
+			return nil, "", err
+		}
+		if filepath.Clean(hdr.Name) == filepath.Clean(entry) {
+			content = []byte(newSkillMD)
+			replaced = true
+		}
+		hdr.Size = int64(len(content))
+		if err := tw.WriteHeader(hdr); err != nil {
+			return nil, "", err
+		}
+		if _, err := tw.Write(content); err != nil {
+			return nil, "", err
+		}
+	}
+	if !replaced {
+		return nil, "", fmt.Errorf("entry %q not found in bundle", entry)
+	}
+	if err := tw.Close(); err != nil {
+		return nil, "", err
+	}
+	if err := gzw.Close(); err != nil {
+		return nil, "", err
+	}
+	return out.Bytes(), hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// PackSingle 将单文件打包为 tar.gz（client.update 发布包用）。
+func PackSingle(name string, content []byte) ([]byte, error) {
+	var out bytes.Buffer
+	h := sha256.New()
+	gz := gzip.NewWriter(io.MultiWriter(&out, h))
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg,
+		Mode: 0o755, Size: int64(len(content)), ModTime: time.Now()}); err != nil {
+		return nil, err
+	}
+	if _, err := tw.Write(content); err != nil {
+		return nil, err
+	}
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+	if err := gz.Close(); err != nil {
+		return nil, err
+	}
+	_ = h
+	return out.Bytes(), nil
+}
+
+// SumBytes 内容 sha256（发布链路用）。
+func SumBytes(b []byte) string { return hex.EncodeToString(sha256Hash(b)) }
+
+func sha256Hash(b []byte) []byte {
+	h := sha256.New()
+	h.Write(b)
+	return h.Sum(nil)
 }

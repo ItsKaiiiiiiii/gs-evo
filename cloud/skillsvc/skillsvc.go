@@ -184,8 +184,10 @@ func (s *Service) SetStatus(skillName, version, newStatus string) (*store.SkillV
 // ---- 安装下发（§7.3）----
 
 // CreateInstallCommands 对目标设备（显式 id 或按 label 圈定）下发 skills.install。
-// 仅 stable 且已签名版本可下发（服务端强制）。
-func (s *Service) CreateInstallCommands(ctx context.Context, skillName, version, targetRoot, onConflict, createdBy string, deviceIDs, labels []string) ([]*store.Command, error) {
+// 仅 stable 且已签名版本可下发（服务端强制）；evaluationRunID 非空 = 评估用途的受控例外
+// （此时为版本签发评估签名，指令与安装记录都留痕 run id）。
+func (s *Service) CreateInstallCommands(ctx context.Context, skillName, version, targetRoot, onConflict, createdBy string,
+	deviceIDs, labels []string, evaluationRunID string) ([]*store.Command, error) {
 	v, err := s.st.GetVersion(skillName, version)
 	if err != nil {
 		return nil, err
@@ -193,7 +195,19 @@ func (s *Service) CreateInstallCommands(ctx context.Context, skillName, version,
 	if v == nil {
 		return nil, ErrNotFound
 	}
-	if v.Status != "stable" || v.Signature == "" {
+	signature := v.Signature
+	if v.Status != "stable" {
+		if evaluationRunID == "" {
+			return nil, ErrNotStable
+		}
+		// 评估受控例外：candidate 评估签名（不改变 status，普通 install 仍拒绝）
+		sig, err := skillpkg.Sign(s.privHex, v.ContentSHA256)
+		if err != nil {
+			return nil, err
+		}
+		signature = sig
+	}
+	if signature == "" {
 		return nil, ErrNotStable
 	}
 	targets, err := s.resolveDevices(deviceIDs, labels)
@@ -212,7 +226,7 @@ func (s *Service) CreateInstallCommands(ctx context.Context, skillName, version,
 		// target_root 语义 = skill 自身目录（§6.5 manifest.root）；管理面传白名单根，此处拼接 skill 名
 		payload, _ := json.Marshal(proto.InstallPayload{
 			Name: skillName, Version: version, BundleURL: url,
-			SHA256: v.ContentSHA256, Signature: v.Signature,
+			SHA256: v.ContentSHA256, Signature: signature,
 			TargetRoot: filepath.Join(targetRoot, skillName), OnConflict: onConflict,
 		})
 		var pm map[string]any
@@ -241,7 +255,12 @@ func (s *Service) OnInstallResult(deviceID string, res *proto.CmdResult) {
 	if ir.Result == "conflict_skipped" {
 		result = "conflict_skipped"
 	}
-	_ = s.st.RecordInstall(deviceID, v, result, ir.Replaced)
+	_ = s.st.RecordInstall(deviceID, v, result, ir.Replaced, ir.EvaluationRunID)
+}
+
+// ResolveDevices 导出：client-update rollout 等复用设备圈定。
+func (s *Service) ResolveDevices(deviceIDs, labels []string) ([]*store.Device, error) {
+	return s.resolveDevices(deviceIDs, labels)
 }
 
 // resolveDevices 圈定下发目标：显式 id 优先，否则按 label 匹配。

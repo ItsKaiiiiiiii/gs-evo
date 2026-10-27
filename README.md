@@ -81,7 +81,7 @@ GSEVO_ADDR=:8080 GSEVO_DATA_DIR=./data ./gs-cloud serve   # 首次启动打印 a
 
 ## 状态
 
-🚧 **P0 + P1 + P2 已实现并通过自测**（e2e 覆盖全部验收标准）：
+🚧 **P0-P4 已实现并通过自测**（e2e 覆盖全部验收标准；12 条 e2e，连续多轮全绿）：
 
 | 验收项 | 状态 |
 |--------|------|
@@ -95,7 +95,15 @@ GSEVO_ADDR=:8080 GSEVO_DATA_DIR=./data ./gs-cloud serve   # 首次启动打印 a
 | P2 断网重连结果不丢（spool）+ 事件补齐（replay） | ✅ `TestP2_OfflineSpoolReplay` |
 | P2 `task.cancel` 杀干净进程树 | ✅ `TestP2_Cancel` |
 | P2 看门狗超时 | ✅ `TestP2_Timeout` |
+| P3 进化全闭环：采集→生成（rationale/diff）→灰度评估→人工放行→生效 | ✅ `TestP3_EvolutionLoop` |
+| P4 自动发布策略（达标自动转 stable+签名+下发） | ✅ `TestP4_AutoPromote` |
+| P4 client.update 发布→rollout→验签落盘 | ✅ `TestP4_ClientUpdate` |
+| P4 审计报表 + RBAC（viewer 只读） | ✅ `TestP4_ReportRBAC` |
 
 P2 关键件：`docs/AGENT-PROTOCOL.md`（内部协议 spec，先行评审）→ AgentAdapter（gsagent 内部协议 / claude-code stream-json 映射）→ Task Runner（隔离工作目录、看门狗、事件内存环 2000 条 + events.jsonl 全量落盘、单帧 64KB 截断）→ 进程树终止（POSIX 进程组 / Windows Job Object）。`task.cancel` 为管理员操作（D11：`max_permission` 与本地 `permission_mode` 取更严者，`require_confirm` 生效时拒绝执行）。
+
+P3 关键件：Evolution Engine（`cloud/evo`）——生成器接口（生产 Anthropic HTTP / e2e 确定性 fake）、`evolve` 生成候选（rationale 强制留存 + diff 审阅端点）、`evaluate` 受控灰度安装（candidate 评估签名，安装记录带 run id）→ 跑 BenchmarkSet → EvaluationRun（指标+verdict 留存）；人工放行沿用 stable 闸门。
+
+P4 关键件：自动发布策略（per-skill `auto-policy`，默认关闭；达标自动 reviewed→stable→签名→下发，D9 受控豁免）、client.update 自更新（发布→rollout→下载/验签/原子 swap，v1 替换后由自启拉起，不自动退出）、审计报表端点、RBAC 最小版（admin/viewer 双角色 token）。
 
 已知实现偏差（与设计文档）：sqlc 代码生成暂以手写 store 层替代（接口形态一致，便于后续替换）；TLS 终止依赖外部反代（dev 环境为 http/ws）。

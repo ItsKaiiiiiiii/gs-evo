@@ -6,6 +6,7 @@ package store
 import (
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"sort"
@@ -21,6 +22,9 @@ var migrationsFS embed.FS
 type Store struct {
 	DB *sql.DB
 }
+
+// ErrNotFound 通用“不存在”（包内各查询返回 nil, nil 表示未命中）。
+var ErrNotFound = errors.New("not found")
 
 // Open 连接 MySQL 并应用内嵌迁移。
 func Open(dsn string) (*Store, error) {

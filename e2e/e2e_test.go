@@ -47,7 +47,9 @@ func TestMain(m *testing.M) {
 		_, _ = db.Exec("CREATE DATABASE gsevo_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
 		_ = db.Close()
 	}
+	os.Setenv("GSEVO_EVO_GENERATOR", "fake") // P3 e2e 用确定性生成器
 	buildMockAgent()
+	buildWorkerBinary()
 	code := runWithCloud(m)
 	os.Exit(code)
 }
@@ -186,6 +188,28 @@ func adminCall(base, token, method, path string, body any) ([]byte, error) {
 
 func (c *cloud) admin(method, path string, body any) ([]byte, error) {
 	return adminCall(c.base, c.adminTok, method, path, body)
+}
+
+// adminUpload 原始字节上传（client-release push 用）。
+func (c *cloud) adminUpload(method, path string, body io.Reader) ([]byte, error) {
+	req, err := http.NewRequest(method, c.base+path, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.adminTok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	out, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("HTTP %d %s: %s", resp.StatusCode, path, out)
+	}
+	return out, nil
 }
 
 // spawnDevice 走真实 enroll 流注册一个 client 并启动 daemon。
