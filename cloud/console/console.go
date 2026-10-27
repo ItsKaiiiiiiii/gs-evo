@@ -6,7 +6,9 @@ package console
 import (
 	"embed"
 	"io/fs"
+	"log/slog"
 	"net/http"
+	"os"
 )
 
 //go:embed static
@@ -14,11 +16,22 @@ var staticFS embed.FS
 
 // Handler 返回控制台静态资源处理器（挂载在 /console/ 下）。
 // 静态资源本身不做鉴权——所有数据操作都在 API 层走 Bearer token。
+//
+// 资源来源两种模式：
+//
+//	默认      go:embed（编译期内嵌，生产形态：单二进制）
+//	开发迭代  设 GSEVO_CONSOLE_DIR=<static 目录>，直接读磁盘，改页面浏览器
+//	          刷新即生效，无需重编译/重启
 func Handler() http.Handler {
+	if dir := os.Getenv("GSEVO_CONSOLE_DIR"); dir != "" {
+		slog.Default().Info("console serving from disk dir (dev mode)", "dir", dir)
+		return http.StripPrefix("/console/", http.FileServer(http.Dir(dir)))
+	}
 	sub, err := fs.Sub(staticFS, "static")
 	if err != nil {
 		panic(err) // embed 内容编译期保证存在
 	}
+	slog.Default().Info("console serving from embedded assets")
 	fileServer := http.FileServer(http.FS(sub))
 	return http.StripPrefix("/console/", fileServer)
 }

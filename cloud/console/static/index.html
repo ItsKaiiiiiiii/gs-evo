@@ -32,12 +32,15 @@
 
 <div id="toast" class="toast hidden"></div>
 
+<!-- 加载顺序契约：api.js（window.API）→ main.js（window.App + 导航壳，
+     boot 在 DOMContentLoaded，晚于所有脚本）→ pages/*.js（解析期 App.register）。
+     新增页面：js/pages/ 下加文件 + 一行 App.register，并在下面追加一个 script 标签。 -->
 <script src="js/api.js"></script>
+<script src="js/main.js"></script>
 <script src="js/pages/devices.js"></script>
 <script src="js/pages/skills.js"></script>
 <script src="js/pages/tasks.js"></script>
 <script src="js/pages/evo.js"></script>
 <script src="js/pages/report.js"></script>
-<script src="js/main.js"></script>
 </body>
 </html>
