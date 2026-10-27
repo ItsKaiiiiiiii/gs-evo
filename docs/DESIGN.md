@@ -20,6 +20,7 @@
 | C11 | 设备模型明确为 **1 OS 用户 = 1 device**；任务默认不跨 Client 重启存活（v1 明示） | skill 在用户 home 下；隐藏行为必须写成显式约定 |
 | C12 | 数据模型新增 `EvaluationRun` / `BenchmarkSet` / `DeviceSkillInstall`，`Command` 补 `cmd_seq`/`acked_at`/`created_by` | 下发覆盖率、回滚决策、审计需要这些事实 |
 | C13 | 新增 §4「语言与技术栈」：client/cloud 均为 Go，协议用 JSON 不上 protobuf，依赖清单与"明确不引入"清单定稿 | 语言技术栈此前未成文 |
+| C14 | 新增 §6.7「鉴权与凭证」：参考 multica 定稿凭证体系（前缀化 token / Bearer 握手鉴权 / SHA-256 哈希落库 / 原地续期 / 吊销踢线 / enroll 注册流 / 防抢注绑定） | 鉴权逻辑此前只有一句话，未成文 |
 
 ---
 
@@ -180,7 +181,7 @@ gs-evo/
 
 | 模块 | 职责 |
 |------|------|
-| **Connection Manager** | 维护 WSS；指数退避重连（1s→30s + 抖动）；心跳 30s（优先 WS 协议层 ping，应用层 ping 兜底）；`hello` 鉴权握手（device token + `proto_version` + `capabilities` + `last_acked_cmd_seq`） |
+| **Connection Manager** | 维护 WSS；指数退避重连（1s→30s + 抖动）；心跳 30s（优先 WS 协议层 ping，应用层 ping 兜底）；鉴权：WS 握手 `Authorization: Bearer <device token>`（见 §6.7），成功后发 `hello`（`proto_version` + `capabilities` + `last_acked_cmd_seq`）；token 剩余 < 7 天自动续期 |
 | **Command Dispatcher** | 按 `type` 路由指令到处理器；**按 `cmd_seq` 逐条 ack**；**幂等缓存**（最近 128 条 `cmd_id → result` 的 LRU，重复指令直接回缓存不重复执行）；本地并发上限（默认 2）；过期指令（`expires_at`）直接回 expired 不执行 |
 | **Agent Adapter** | 启动时探测本机 agent（路径、版本、可用性）；运行期 spawn 子进程，stdin/stdout 按行交换 JSON（协议见 P2 spec）；**权限模式映射**（把 `task.start.max_permission` 翻译为各 agent 的无头权限参数）；超时与看门狗；**进程树终止**：POSIX 进程组 / **Windows Job Object** |
 | **Task Runner** | 每任务隔离工作目录 `tasks/<task_id>/`；全量 stdout/stderr 落盘本地；流式转 `task.event` 上报（单帧上限 64KB，有界缓冲 2000 条，超出只传引用）；任务结束后**结果先写 spool 再发送**，成功送达后删除 |
@@ -208,7 +209,7 @@ gs-evo/
 ### 6.1 通道与心跳
 
 - 传输：`wss://cloud/api/v1/agent-ws`，JSON 文本帧；大文件走 `https://cloud/api/v1/bundles/*`（预签名 URL，一次性 PUT/GET）；
-- 鉴权：连接后首条 `hello` 携带 device token，失败即断；
+- 鉴权：WS upgrade 请求头 `Authorization: Bearer <device token>`，服务端在 **upgrade 前**完成校验，失败以 401/404 JSON 拒绝、连接不建立（multica 同款，优于"首条消息带 token"：未鉴权连接根本不存在）；详见 §6.7；
 - 心跳：WS 协议层 ping/pong 优先，应用层 `ping`（30s）兜底；云端 **90s** 无任何帧判定离线（3 倍容忍）；
 - 重连：指数退避（1s→30s）+ 抖动；重连成功即重新 `hello`，云端按 `last_acked_cmd_seq` **补发未 ack 指令**，Client 补传 spool 中未送达结果。
 
@@ -262,7 +263,6 @@ gs-evo/
 {
   "type": "hello",
   "proto_version": 1,
-  "token": "…",
   "device": { "hostname": "…", "os": "darwin", "arch": "arm64", "worker_version": "0.3.0" },
   "agents": [ { "type": "claude-code", "version": "2.x", "path": "…", "ok": true } ],
   "skills": [ { "name": "gerrit-review", "version": "3", "content_hash": "sha256:1f0c…", "local_state": "clean" } ],
@@ -296,6 +296,67 @@ gs-evo/
 - **< 256KB**：base64 内嵌 `cmd_result.data.bundle`；
 - **≥ 256KB**：`skills.collect` 返回 `{upload_url}`（预签名 PUT），Client 直传对象存储；`skills.install` 同理给下载 URL；
 - 一律附 sha256；**stable 版本另附 ed25519 签名（对 sha256 值签名）**，Client 内置公钥，验签失败拒装并告警。
+
+### 6.7 鉴权与凭证（参考 multica）
+
+> 本节参考 multica（multica-ai/multica，Go）已验证的 daemon↔cloud 鉴权实现（按 token 前缀分发的鉴权中间件、Bearer 握手、哈希落库、原地续期、owner 绑定防抢注），结合 gs-evo 更简单的信任模型（v1 单管理员、无 workspace）裁剪而成。
+
+**凭证体系**（按前缀区分；统一走 `Authorization: Bearer` 头，服务端中间件按前缀分发校验路径——multica `daemon_auth.go` 同款模式）：
+
+| 前缀 | 名称 | 使用者 | 生命周期 | 说明 |
+|------|------|--------|----------|------|
+| `gsd_` | **device token** | Client 全部云端通信（WSS 握手、换取 bundle URL、续期） | 90 天，原地续期 | 每设备一枚，`Device.token_hash` 唯一 |
+| `gse_` | **enroll token** | 新设备注册，换取 device token | 一次性 + 24h TTL | 管理员在 console 生成并分发 |
+| `gsa_` | **admin token** | `cloud ctl`（创建指令 / 审批 / 签名） | 长效，可吊销 | D11"指令创建者鉴权"的载体，`Command.created_by` 记录 |
+| （预签名 URL） | bundle 上传/下载 | Client | 一次性，TTL 10 分钟 | Client 先凭 device token 换取；bundle 端点不认长凭证 |
+
+要点：全部为**不透明随机 token**（20 字节 `crypto/rand` + 可读前缀，multica 同款），**不用 JWT**——无状态验证意味着无法即时吊销，而吊销能力对本系统是硬需求；服务端**只存 SHA-256 哈希 + 唯一索引**，明文仅在签发响应中出现一次。
+
+**注册（enroll）流程**（multica headless `login --token` 同款；浏览器 OAuth 配对流随 console 用户体系放 P4）：
+
+```
+管理员 console:  cloud ctl enroll create --label "办公室台式机"   → gse_…（24h 有效）
+新机器:          worker ctl login --enroll gse_…（或交互粘贴，不进 shell history）
+  1. 本地生成 device.id（UUIDv7，存 ~/.gs-agent-worker/device.id，0600，
+     与 token 分离存放——multica identity.go 同款）
+  2. POST /api/v1/devices/enroll {enroll_token, device_id, hostname, os, arch, worker_version}
+  3. 云端：校验 enroll token → 创建 Device{owner=管理员} → 签发 device token
+     （响应体唯一一次返回明文）→ enroll token 立即作废
+  4. Client：写入 config.toml（chmod 0600 + 临时文件原子 rename，multica config.go 同款）
+```
+
+**防抢注**（借 multica MUL-8154 的教训）：device token 签发即绑定 `Device.owner`。同一 `device_id` 再次 enroll 时旧 token 立即作废、新 token 归属本次 enroll 的所有者——v1 仅管理员能生成 enroll token，天然无抢注面；**P4 多租户后规则为"非 owner 不得对已存在的 device_id 重新 enroll"，拒绝统一回 404（防枚举探测，multica 同款）**。
+
+**连接鉴权**：
+
+- WS upgrade 请求头 `Authorization: Bearer gsd_…`；服务端**在 upgrade 前**校验：SHA-256 → 查缓存/库 → 存在、未过期、设备未吊销 → 通过后把 `device_id` 绑定为**连接级 context**，连接生命周期内不再逐帧鉴权（multica 升级时批量授权 + lease 播种同思路）；
+- 失败码：无效/过期 → **401**；设备存在但不属于你（P4 多租户）→ **404**（防探测）；
+- WS 内每帧的归属校验（如 `task.event.task_id` 必须属于本 device）复用连接绑定的 device context——multica `daemon_rpc.go` "握手凭证回放进 context" 同思路；
+- `worker daemon` 只从 config.toml 读 token，**刻意不读环境变量**（防 agent 子进程伪造凭证，multica `requireDaemonAuth` 同款）；
+- 服务端剥离客户端可伪造的服务端语义头（multica 剥 `X-Actor-Source` 等，gs-evo 如有同类头一并剥离）。
+
+**校验路径与缓存**（v1 无 Redis，multica 多级缓存简化为进程内 LRU）：
+
+- 键：`sha256(token)` → 值 `{device_id, owner, expires_at}`；缓存 TTL **钳制到 token 剩余寿命**（multica `TTLForExpiry` 同款，防"缓存活得比 token 久"）；
+- miss 走 SQL（查询自带 `expires_at > now()`）后回填；缓存故障降级直查 DB——**鉴权 fail-closed，缓存 fail-open**。
+
+**生命周期**：
+
+- device token 90 天；剩余 < 7 天时 `POST /api/v1/devices/token/renew`（Bearer 鉴权），CAS 延长到 now+90 天。**原地续期、不轮换值**——multica 同款理由：daemon 与 `worker ctl` 多进程共享同一 config.toml，换值会互相踩；
+- 续期节奏：daemon 每 24h 一次 + 启动 preflight 同步续期（multica 为 3 天间隔；gs-evo 指令面更敏感，取 24h）；
+- **401 处理**（multica 同款）：daemon 不退出、不清配置，日志持续 WARN "run `worker ctl login`" + 退避重连；鉴权不过自然收不到任何指令，无额外风险面；
+- **吊销**（有意比 multica 更强）：multica 吊销后不断开在线连接，靠"不再分配工作"兜底——因为它的 daemon 断了也只是收不到任务。gs-evo 的设备还能执行指令/装 skill，所以 **Gateway 维护 device_id → 连接映射，吊销事务提交后立即主动关闭该连接并拒绝重连**（§9"吊销"行的落地机制）。
+
+**重连对账**：鉴权与首次连接**完全相同，无会话恢复**（不做 resume ticket——multica 同款，省一类状态机）；重连 = 全新 Bearer 握手 + hello 对账（补发未 ack 指令、补传 spool，见 §7.1）。设备档案被删（404）→ 本地提示重新 enroll（multica "runtime 消失 → 重新注册" 同款）。
+
+**不沿用 multica 的部分**：
+
+| multica 机制 | gs-evo 取舍 | 原因 |
+|--------------|-------------|------|
+| workspace/成员体系（membership、批量吊销事务） | 不引入，P4 多租户时再扩展 | v1 单管理员 |
+| `mat_` task token 注入 agent 进程 | 不需要 | gs-evo 的 agent 进程不与云端通信（D12），不存在"owner 凭证泄露给 agent 进程"的面 |
+| 浏览器 OAuth login（本地回调端口 + state 防 CSRF） | P4 随 console 用户体系引入 | v1 headless enroll 流已覆盖 |
+| Redis 缓存 | 进程内 LRU | v1 规模不需要 |
 
 ## 7. 关键流程
 
@@ -381,8 +442,9 @@ Cloud                                Client                          agent 进�
 ## 8. 数据模型（云端）
 
 ```
-Device      {id, token_hash, hostname, os, arch, worker_version, labels[],
-             last_seen, status, last_acked_cmd_seq}
+Device      {id, owner, token_hash, token_expires_at, hostname, os, arch,
+             worker_version, labels[], last_seen, status, last_acked_cmd_seq}
+EnrollToken {token_hash, label, created_by, expires_at, used_at}
 
 Skill       {id, name, latest_stable, latest_any, agent_compat[]}
 SkillVer    {id, skill_id, version, manifest, content_sha256, signature,
@@ -415,7 +477,7 @@ Command     {id, cmd_seq, device_id, cmd_type, payload, created_by,
 | 层 | 措施 |
 |----|------|
 | 传输 | 强制 WSS/HTTPS（TLS） |
-| 身份 | 每设备独立 token（`worker login` 获取，可吊销）；token 哈希落库；云端**指令创建者鉴权**（v1 单管理员 + API token，多租户 RBAC 在 P4） |
+| 身份 | 凭证体系与握手鉴权见 §6.7：前缀化 device/admin/enroll token（不透明随机值，非 JWT）、`Authorization: Bearer` 握手、SHA-256 哈希落库、90 天原地续期、**吊销即踢线**；云端**指令创建者鉴权**（v1 单管理员 admin token，多租户 RBAC 在 P4） |
 | 指令面 | 封闭枚举 + 结构化 payload；`Command` 全量审计（含创建者）；指令带有效期；**at-least-once + Client 幂等**防重放副作用 |
 | 执行面 | `task.start` 的 `max_permission` 与本地 permission_mode 配置**取更严者**（建议默认 `readonly` 起步）；本地 `require_confirm` 开关（高危机器可开：任务到达先本机确认）；进程树隔离 + 看门狗超时；敏感 env 不透传，agent 凭证用本机已有配置（D12） |
 | 文件面 | skill 读写仅限本地白名单目录，**白名单主权在本地，云端 policies 只能收紧**（D10）；安装走临时目录 + 原子 rename + `.prev` 保留 |
@@ -465,7 +527,7 @@ Command     {id, cmd_seq, device_id, cmd_type, payload, created_by,
 
 | 阶段 | 范围 | 验收标准 |
 |------|------|----------|
-| **P0 骨架**（1-2 周） | Client：连接+心跳+hello（proto_version/capabilities/last_acked_cmd_seq）+ 指令分发框架 + **cmd_seq ack + 幂等缓存 + spool 骨架**；Cloud：Gateway + Device Registry + Command 审计落库；`agent.probe` | 控制台可见设备在线/离线切换；**拔网线重连后指令补发且不重复执行** |
+| **P0 骨架**（1-2 周） | Client：**enroll 注册 + Bearer 握手鉴权** + 连接+心跳+hello（proto_version/capabilities/last_acked_cmd_seq）+ 指令分发框架 + **cmd_seq ack + 幂等缓存 + spool 骨架**；Cloud：Gateway（鉴权中间件 + 吊销踢线）+ Device Registry + EnrollToken + Command 审计落库；`agent.probe` | 控制台可见设备在线/离线切换；**拔网线重连后指令补发且不重复执行**；**吊销 token 后在线设备立即被踢且无法重连** |
 | **P1 Skill 通道**（2-3 周） | `skills.scan/collect/install` + Skill Registry + 内容寻址 + **ed25519 签名/验签** + **版本状态机** + **冲突检测（skip_and_report）** + `.prev` 回滚 | A 机采集 → 云端人工转 stable 签名 → 装到 B 机；**本地改动被跳过并上报**；`rollback` 秒回上一版 |
 | **P2 任务通道**（3 周） | **Agent 协议 spec（先行文档）** → AgentAdapter（stdio JSON-lines + 权限模式映射）+ Task Runner + `task.start/cancel/events_replay` + 事件流 + Windows Job Object | 云端下发 prompt 实时回传；**断网重连后事件补齐、结果不丢（spool）**；cancel 在三平台都能杀干净进程树 |
 | **P3 自进化（人工闭环）**（持续） | BenchmarkSet + EvaluationRun + 生成候选（diff/理由留存）+ 灰度 + **管理员审阅放行流** | 一条 skill 走完"采集→生成→评估→**人工审**→签名→灰度→全网"闭环，全程记录可复查 |
