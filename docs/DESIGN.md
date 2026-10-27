@@ -16,11 +16,12 @@
 | C7 | 明确 Windows 差异：进程树终止用 Job Object；安装覆盖处理被锁文件 | Windows 在自启支持范围内，这两处 POSIX 假设会翻车 |
 | C8 | 进化闭环优先建**评估**（BenchmarkSet + EvaluationRun），P3 验收为"人工在环的完整闭环"，全自动发布推迟到 P4 且需数据达标 | 生成易、评估难；防 Goodhart（讨好基准而非真变好） |
 | C9 | 协议第一天带 `proto_version` + `capabilities`；hello 上报完整 skill 列表（非摘要） | 事后补版本协商很痛；摘要比对有碰撞歧义 |
-| C10 | 传输阈值调整：内嵌 base64 上限 256KB，其余一律走预签名 URL | WS 帧过中间代理常限 1MB；4MB base64 膨胀 33% 易翻车 |
+| C10 | 传输阈值调整：内嵌 base64 上限 256KB，其余一律走一次性票据 URL（云端自签发） | WS 帧过中间代理常限 1MB；4MB base64 膨胀 33% 易翻车 |
 | C11 | 设备模型明确为 **1 OS 用户 = 1 device**；任务默认不跨 Client 重启存活（v1 明示） | skill 在用户 home 下；隐藏行为必须写成显式约定 |
 | C12 | 数据模型新增 `EvaluationRun` / `BenchmarkSet` / `DeviceSkillInstall`，`Command` 补 `cmd_seq`/`acked_at`/`created_by` | 下发覆盖率、回滚决策、审计需要这些事实 |
 | C13 | 新增 §4「语言与技术栈」：client/cloud 均为 Go，协议用 JSON 不上 protobuf，依赖清单与"明确不引入"清单定稿 | 语言技术栈此前未成文 |
 | C14 | 新增 §6.7「鉴权与凭证」：参考 multica 定稿凭证体系（前缀化 token / Bearer 握手鉴权 / SHA-256 哈希落库 / 原地续期 / 吊销踢线 / enroll 注册流 / 防抢注绑定） | 鉴权逻辑此前只有一句话，未成文 |
+| C15 | 存储选型变更：数据库 MySQL 8（原 PostgreSQL）；bundle 存**本地磁盘**（原 S3 兼容对象存储/MinIO）；"预签名 URL"相应改为**云端自签发一次性票据 URL**，协议形状不变 | 部署面最小化：一个 MySQL + 一个磁盘目录即可跑；迁移对象存储只需换实现，不动协议 |
 
 ---
 
@@ -59,7 +60,8 @@
                           │  │ Registry │    │   Engine     │  └───────────┘ │
                           │  │ + RBAC   │    │ (评估→候选→人审)│               │
                           │  └──────────┘    └─────────────┘                │
-                          │        Object Store（内容寻址 bundle，预签名URL）   │
+                          │        Bundle Store（本地磁盘，内容寻址，           │
+                          │          一次性票据 URL 读写）                     │
                           └──────────────────────▲───────────────────────────┘
                                                  │ WSS（唯一通道）+ HTTPS（大文件）
                  ┌──────────────────────────────┼──────────────────────────────┐
@@ -84,7 +86,7 @@
 
 | # | 决策 | 理由 |
 |---|------|------|
-| D1 | **单一 WSS 长连接**承载心跳、指令、任务事件、skill 通知；大文件走 HTTPS 预签名 URL | 免轮询、免多协议；NAT/内网友好；大文件不走 WS 帧避免代理限制 |
+| D1 | **单一 WSS 长连接**承载心跳、指令、任务事件、skill 通知；大文件走 HTTPS 一次性票据 URL（云端本地存储） | 免轮询、免多协议；NAT/内网友好；大文件不走 WS 帧避免代理限制 |
 | D2 | **统一指令模型** `cmd → cmd_result`，投递语义 **at-least-once + Client 幂等** | 所有云端能力收敛到一种交互模式；网络抖动下指令/结果不丢、不重复执行 |
 | D3 | Client **不开放入站端口**，只外连 | 无需在用户机器上暴露服务，安全面最小 |
 | D4 | Agent 交互收敛为 **AgentAdapter 接口**（stdio JSON-lines，P2 前出协议 spec） | 未来支持 codex/claude/ACP 等只加 adapter，不动框架 |
@@ -106,7 +108,7 @@
 
 1. Client 需要**单文件二进制 + 三平台交叉编译**（Windows/macOS/Linux × amd64/arm64）+ 开机自启注册，Go 是这个场景的最优解；
 2. **multica 同为 Go**（server 为 Go module），其 daemon 生命周期、autostart 注册、WS 重连、进程树管理的工程经验可直接移植；
-3. Cloud 初期单体，Go 的部署形态 = 一个二进制 + Postgres + 对象存储，运维面最小。
+3. Cloud 初期单体，Go 的部署形态 = 一个二进制 + MySQL + 本地磁盘目录，运维面最小。
 
 备选否决理由：Rust（安全性更好但迭代效率不适合 P0-P2 快速验证期）；TypeScript/Node（client 打包单文件困难，后台守护进程体验差）。
 
@@ -119,14 +121,14 @@ gs-evo/
 ├── pkg/
 │   ├── proto/     # 协议消息类型 + 指令类型常量（两侧共享，单一事实）
 │   └── skillpkg/  # 共享工具：tar+gzip 打包、manifest 解析、ed25519 签名/验签
-├── deploy/        # docker-compose（cloud + postgres + minio）、systemd/LaunchAgent 模板
+├── deploy/        # docker-compose（cloud + mysql）、systemd/LaunchAgent 模板
 └── docs/
 ```
 
 ### 4.3 协议序列化：JSON，不上 protobuf
 
 - 两侧同语言，共享 `pkg/proto` 结构体即可，无跨语言序列化需求；
-- 消息为低频控制面（指令/事件），非性能敏感数据面；JSON 文本帧**人可直接读**——审计与排障价值高（`Command.payload` 直接落 JSONB）；
+- 消息为低频控制面（指令/事件），非性能敏感数据面；JSON 文本帧**人可直接读**——审计与排障价值高（`Command.payload` 直接落 MySQL JSON 列）；
 - `proto_version` 预留演进；未来若 client 需出 Rust 版，再抽 schema 并生成，届时协议已稳定，成本可控。
 
 ### 4.4 Client 依赖清单
@@ -148,9 +150,9 @@ gs-evo/
 |------|------|------|
 | HTTP 路由 | stdlib `net/http`（Go 1.22+ pattern routing） | 端点少，不引框架 |
 | WebSocket | `gorilla/websocket` | 与 client 同库 |
-| 数据库 | PostgreSQL 16+ | 唯一事实存储 |
-| DB 访问 | `sqlc` + `golang-migrate` | multica 同款（类型安全、SQL 即文档、编号版 up/down 迁移文件） |
-| 对象存储 | S3 兼容 API（`aws-sdk-go-v2`，endpoint 可配） | 自托管 MinIO；云上可直接换 S3/OSS |
+| 数据库 | MySQL 8.0+ | 唯一事实存储；JSON 列存 payload/manifest，UUID 用 BINARY(16) |
+| DB 访问 | `sqlc`（MySQL engine）+ `golang-migrate` | 类型安全、SQL 即文档、编号版 up/down 迁移文件（模式同 multica，引擎换 MySQL） |
+| bundle 存储 | **本地磁盘**（内容寻址：`<data_dir>/bundles/<aa>/<sha256>.tar.gz`） | 零外部依赖；读写经云端签发的一次性票据 URL；备份靠磁盘快照/rsync |
 | 后台任务 | 同进程 goroutine + DB 队列表 | 初期不引 asynq/river/NATS——Evolution Engine 是异步 job，不是高吞吐队列 |
 | LLM 调用 | `anthropic-sdk-go`（模型端点可配） | Evolution Engine 的生成与评审 |
 | 管理界面 | P0-P2 用 `cloud ctl` CLI 子命令；Web 控制台 P3 后按需立项 | 初期不建前端 |
@@ -191,7 +193,7 @@ gs-evo/
 
 **Client 刻意不含任何策略**：不决定何时进化、不决定装到哪台机器、不解析任务优先级。**但 Client 拥有两条不可协商的本地主权**：目录白名单的修改权、`require_confirm` 开关。
 
-### 5.2 Cloud（初期单体服务 + 数据库 + 对象存储）
+### 5.2 Cloud（初期单体服务 + MySQL + 本地磁盘存储）
 
 | 模块 | 职责 |
 |------|------|
@@ -202,13 +204,13 @@ gs-evo/
 | **Evolution Engine** | 自进化闭环（离线/异步）：消费清单与任务反馈 → 生成候选版本（带 diff 与理由）→ **产出 candidate（不是 stable）** → 灰度设备跑 EvaluationRun → 评审报告给管理员 → 人工放行后签名转 stable |
 | **Console/API** | 管理界面（初期 `cloud ctl` CLI，见 §4.5）：设备管理、skill 浏览与 diff 审阅、任务下发与审批、指令审计查询 |
 
-**初期实现约束**：单体服务 + 一个数据库 + 一个对象存储；Evolution Engine 是同进程异步 job。**先不分微服务。**
+**初期实现约束**：单体服务 + 一个 MySQL + 一个本地存储目录；Evolution Engine 是同进程异步 job。**先不分微服务。**
 
 ## 6. 通信协议
 
 ### 6.1 通道与心跳
 
-- 传输：`wss://cloud/api/v1/agent-ws`，JSON 文本帧；大文件走 `https://cloud/api/v1/bundles/*`（预签名 URL，一次性 PUT/GET）；
+- 传输：`wss://cloud/api/v1/agent-ws`，JSON 文本帧；大文件走 `https://cloud/api/v1/bundles/*`（云端自签发的**一次性票据 URL**，TTL 10 分钟、PUT/GET 各消费一次即作废，由云端服务自己鉴权自己落盘）；
 - 鉴权：WS upgrade 请求头 `Authorization: Bearer <device token>`，服务端在 **upgrade 前**完成校验，失败以 401/404 JSON 拒绝、连接不建立（multica 同款，优于"首条消息带 token"：未鉴权连接根本不存在）；详见 §6.7；
 - 心跳：WS 协议层 ping/pong 优先，应用层 `ping`（30s）兜底；云端 **90s** 无任何帧判定离线（3 倍容忍）；
 - 重连：指数退避（1s→30s）+ 抖动；重连成功即重新 `hello`，云端按 `last_acked_cmd_seq` **补发未 ack 指令**，Client 补传 spool 中未送达结果。
@@ -294,7 +296,8 @@ gs-evo/
 ### 6.6 内容传输
 
 - **< 256KB**：base64 内嵌 `cmd_result.data.bundle`；
-- **≥ 256KB**：`skills.collect` 返回 `{upload_url}`（预签名 PUT），Client 直传对象存储；`skills.install` 同理给下载 URL；
+- **≥ 256KB**：`skills.collect` 返回 `{upload_url}`（一次性 PUT 票据 URL），Client 直传云端，落 `bundles/<aa>/<sha256>.tar.gz`；`skills.install` 同理给一次性下载票据 URL；
+- 票据 URL 由云端服务自签发自校验（绑 `device_id` + `sha256` + 动作 + TTL）——**协议形状与对象存储方案的预签名 URL 一致**，未来若迁移到 S3/OSS 只换实现，协议与 Client 不变；
 - 一律附 sha256；**stable 版本另附 ed25519 签名（对 sha256 值签名）**，Client 内置公钥，验签失败拒装并告警。
 
 ### 6.7 鉴权与凭证（参考 multica）
@@ -308,7 +311,7 @@ gs-evo/
 | `gsd_` | **device token** | Client 全部云端通信（WSS 握手、换取 bundle URL、续期） | 90 天，原地续期 | 每设备一枚，`Device.token_hash` 唯一 |
 | `gse_` | **enroll token** | 新设备注册，换取 device token | 一次性 + 24h TTL | 管理员在 console 生成并分发 |
 | `gsa_` | **admin token** | `cloud ctl`（创建指令 / 审批 / 签名） | 长效，可吊销 | D11"指令创建者鉴权"的载体，`Command.created_by` 记录 |
-| （预签名 URL） | bundle 上传/下载 | Client | 一次性，TTL 10 分钟 | Client 先凭 device token 换取；bundle 端点不认长凭证 |
+| （bundle 票据 URL） | bundle 上传/下载 | Client | 一次性，TTL 10 分钟 | Client 先凭 device token 换取（云端本地存储的自签发 URL）；bundle 端点不认长凭证 |
 
 要点：全部为**不透明随机 token**（20 字节 `crypto/rand` + 可读前缀，multica 同款），**不用 JWT**——无状态验证意味着无法即时吊销，而吊销能力对本系统是硬需求；服务端**只存 SHA-256 哈希 + 唯一索引**，明文仅在签发响应中出现一次。
 

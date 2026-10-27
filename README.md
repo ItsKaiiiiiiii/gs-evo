@@ -11,7 +11,7 @@
 
 ## 设计原则
 
-1. **一条 WSS 长连接**承载心跳、指令、事件、结果；大文件走 HTTPS 预签名 URL；
+1. **一条 WSS 长连接**承载心跳、指令、事件、结果；大文件走 HTTPS 一次性票据 URL（云端本地存储）；
 2. **统一指令模型**（`cmd → cmd_result`，at-least-once + Client 幂等）覆盖所有云端能力；
 3. **Client 是执行器、云端是决策者**——但 Client 持有三道不可协商的本地保险：**验签、目录白名单主权、幂等**。
 
@@ -19,7 +19,7 @@
 
 - **语言**：Go（client 与 cloud 同栈；multica 同款，其 daemon 生命周期 / autostart / 重连经验可直接移植）
 - **协议**：JSON over WSS（不上 protobuf），消息类型共享于 `pkg/proto`
-- **存储**：PostgreSQL（sqlc + golang-migrate）+ S3 兼容对象存储（自托管 MinIO 起步）
+- **存储**：MySQL 8（sqlc + golang-migrate）+ 本地磁盘内容寻址存储（bundle 经云端一次性票据 URL 读写）
 - **部署**：云端单体服务 + docker compose；Client 单二进制 + 系统自启（LaunchAgent / systemd user unit / Windows 计划任务）
 
 详见 [DESIGN.md §4](docs/DESIGN.md)。
