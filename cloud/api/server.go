@@ -487,7 +487,9 @@ func (s *Server) onCmdResult(deviceID string, res *proto.CmdResult) {
 	switch cmd.CmdType {
 	case proto.CmdSkillsCollect:
 		ingest := "registered"
-		if err := s.svc.IngestCollectResult(deviceID, res); err != nil {
+		if !res.OK {
+			ingest = "" // worker 侧执行失败：不给 ingest 字段，失败信息已在 error
+		} else if err := s.svc.IngestCollectResult(deviceID, res); err != nil {
 			if strings.Contains(err.Error(), "already registered") {
 				ingest = "unchanged" // 内容与已有版本一致：明确告知而非静默
 			} else {
@@ -495,7 +497,9 @@ func (s *Server) onCmdResult(deviceID string, res *proto.CmdResult) {
 				s.log.Warn("ingest collect failed", "device", deviceID, "err", err)
 			}
 		}
-		s.appendCommandResult(cmd.ID, map[string]any{"ingest": ingest})
+		if ingest != "" {
+			s.appendCommandResult(cmd.ID, map[string]any{"ingest": ingest})
+		}
 	case proto.CmdSkillsInstall:
 		s.svc.OnInstallResult(deviceID, res)
 	case proto.CmdTaskStart:

@@ -1,6 +1,7 @@
 // api.js：REST 封装（token 管理 + 统一错误提示）。所有页面模块都经此调用后端。
 (function () {
   const TOKEN_KEY = 'gsevo_token';
+  const API_ = '/api/v1/admin';
 
   function token() { return localStorage.getItem(TOKEN_KEY) || ''; }
   function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
@@ -32,8 +33,23 @@
     return raw ? text : data;
   }
 
+  // pollCmd 轮询指令回执直到 acked/超时；resolve 统一形态 {status, ok, data, error}。
+  async function pollCmd(cmdID, timeoutMs = 60000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const rows = await call('GET', `${API_}/commands?cmd_id=${cmdID}`);
+      const r = (rows || [])[0];
+      if (r && (r.status === 'acked' || r.status === 'expired')) {
+        const res = r.result || {};
+        return { status: r.status, ok: !!res.ok, data: res.data || {}, error: res.error, envelope: res };
+      }
+      await new Promise(res => setTimeout(res, 500));
+    }
+    return { status: 'timeout', ok: false, data: {}, error: '等待回执超时' };
+  }
+
   window.API = {
-    token, setToken, clearToken,
+    token, setToken, clearToken, pollCmd,
     get: (p) => call('GET', p),
     post: (p, b) => call('POST', p, b || {}),
     put: (p, b) => call('PUT', p, b),
