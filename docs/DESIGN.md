@@ -403,6 +403,7 @@ Cloud                                              Client
 ```
 
 - **回滚**：`worker ctl skills rollback <name>`（本地用 `.prev` 秒回）或云端重发上一 stable 版本的 install 指令；
+- **target_root 语义**：§6.5 manifest.root = skill 自身目录。管理面 install 接口传**白名单根目录**，云端签发指令时拼接 `<target_root>/<skill_name>`，Client 仍按白名单（等于根或其子目录）校验；
 - **Windows**：rename 覆盖遇被锁文件 → 退避重试（3 次）→ 失败回报，不部分覆盖。
 
 ### 7.4 任务实时下发

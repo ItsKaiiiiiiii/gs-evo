@@ -55,6 +55,43 @@ gs-evo/
 
 详细验收标准见 [DESIGN.md §12](docs/DESIGN.md)。
 
+## 快速开始（开发）
+
+依赖：Go ≥ 1.23、MySQL 8（库与用户自建）。
+
+```bash
+# 全量自测（e2e：真实 MySQL + 进程内 cloud + 两个 client）
+#   e2e 默认 DSN 指向 127.0.0.1:3306/gsevo_test（用户 gsevo），可用例见 e2e/e2e_test.go
+go test ./... -count=1
+
+# 起云端
+GSEVO_DSN="gsevo:pw@tcp(127.0.0.1:3306)/gsevo?parseTime=true&multiStatements=true&time_zone=%27%2B00%3A00%27" \
+GSEVO_ADDR=:8080 GSEVO_DATA_DIR=./data ./gs-cloud serve   # 首次启动打印 admin token 与签名公钥
+
+# 注册一台机器（headless 流，§6.7）
+./gs-cloud enroll create --label my-laptop          # → gse_…（24h 一次性）
+./gs-worker login --server http://cloud:8080 --enroll gse_… \
+    --skills-root ~/.claude/skills --signing-pubkey <gs-cloud key show>
+
+# 常用管理命令
+./gs-cloud device list | device revoke --id ID
+./gs-cloud cmd send --device ID --type skills.scan
+./gs-cloud skill list | versions --name N | set-status … | install …
+```
+
 ## 状态
 
-🚧 设计阶段（v2 方案已定稿，P0 未开始）。
+🚧 **P0 + P1 已实现并通过自测**（e2e 覆盖全部验收标准）：
+
+| 验收项 | 状态 |
+|--------|------|
+| P0 设备在线/离线切换 | ✅ `TestP0_OnlineOffline` |
+| P0 拔线重连补发 + 幂等不重复执行 | ✅ `TestP0_RedeliveryAndIdempotency` |
+| P0 吊销即踢线且无法重连 | ✅ `TestP0_RevokeKick` |
+| P1 采集→人工转 stable 签名→装到另一机 | ✅ `TestP1_CollectSignInstall` |
+| P1 本地改动冲突跳过（skip_and_report） | ✅ 同上（含 overwrite 显式覆盖路径） |
+| P1 `.prev` 本地秒回滚 | ✅ 同上 |
+
+P2（任务通道：AgentAdapter + stdio 协议）未开始；动工前置 `docs/AGENT-PROTOCOL.md`。
+
+已知实现偏差（与设计文档）：sqlc 代码生成暂以手写 store 层替代（接口形态一致，便于后续替换）；TLS 终止依赖外部反代（dev 环境为 http/ws）。

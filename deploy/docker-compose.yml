@@ -1,0 +1,38 @@
+# gs-evo 云端最小部署（§4.2：单体 + MySQL + 本地磁盘）
+# 用法：docker compose up -d --build
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: root_pw_change_me
+      MYSQL_DATABASE: gsevo
+      MYSQL_USER: gsevo
+      MYSQL_PASSWORD: gsevo_pw_change_me
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot_pw_change_me"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  cloud:
+    build:
+      context: ..
+      dockerfile: deploy/cloud.Dockerfile
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      GSEVO_DSN: "gsevo:gsevo_pw_change_me@tcp(mysql:3306)/gsevo?parseTime=true&multiStatements=true&time_zone=%27%2B00%3A00%27"
+      GSEVO_ADDR: ":8080"
+      GSEVO_DATA_DIR: "/data"
+      GSEVO_PUBLIC_URL: "http://localhost:8080"   # 对外地址（client 下载 bundle 用）
+    ports:
+      - "8080:8080"
+    volumes:
+      - cloud-data:/data   # 内容寻址 bundle + 签名密钥（记得纳入备份，§6.6）
+
+volumes:
+  mysql-data:
+  cloud-data:

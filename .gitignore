@@ -1,0 +1,12 @@
+# 构建产物
+/gs-cloud
+/gs-worker
+*.test
+*.out
+
+# 运行时数据
+data/
+*.log
+
+# 本地工具链
+.refs/
