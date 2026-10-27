@@ -1,6 +1,8 @@
 package store
 
 import (
+	"encoding/json"
+
 	"github.com/ItsKaiiiiiiii/gs-evo/pkg/proto"
 )
 
@@ -24,6 +26,42 @@ func (s *Store) UpsertRuntime(deviceID string, rt proto.RuntimeInfo, source stri
 		ok=VALUES(ok), source=VALUES(source), last_seen=NOW(3)`,
 		rt.RuntimeID, deviceID, rt.Type, rt.Version, rt.Path, rt.OK, source)
 	return err
+}
+
+// RuntimeWithDevice 全局运行时视图（含设备主机名，任务/操作页选择器用）。
+type RuntimeWithDevice struct {
+	RuntimeRow
+	Hostname  string   `json:"hostname"`
+	DevStatus string   `json:"device_status"`
+	Labels    []string `json:"labels"`
+}
+
+// ListRuntimes 全局运行时列表（跨设备，join 设备主机名）。
+func (s *Store) ListRuntimes() ([]*RuntimeWithDevice, error) {
+	rows, err := s.DB.Query(`SELECT r.id, r.device_id, r.type, COALESCE(r.version,''), COALESCE(r.path,''),
+		r.ok, r.source, DATE_FORMAT(r.last_seen, '%Y-%m-%dT%H:%i:%sZ'),
+		d.hostname, d.status, COALESCE(d.labels, JSON_ARRAY())
+		FROM runtime r JOIN device d ON d.id=r.device_id
+		ORDER BY d.hostname, r.type`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*RuntimeWithDevice{}
+	for rows.Next() {
+		r := new(RuntimeWithDevice)
+		var labelsRaw []byte
+		if err := rows.Scan(&r.ID, &r.DeviceID, &r.Type, &r.Version, &r.Path, &r.OK, &r.Source,
+			&r.LastSeen, &r.Hostname, &r.DevStatus, &labelsRaw); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(labelsRaw, &r.Labels)
+		if r.Labels == nil {
+			r.Labels = []string{}
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) ListRuntimesByDevice(deviceID string) ([]*RuntimeRow, error) {

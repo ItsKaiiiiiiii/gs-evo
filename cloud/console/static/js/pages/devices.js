@@ -104,6 +104,24 @@
         </div>
       </div>
       <div class="card"><h3>运行时（本机 agent 实例）</h3>
+        ${App.canWrite() ? `
+        <div class="form-row">
+          <button class="small primary" id="rt-add">添加运行时（绑定本机）</button>
+          <span class="muted">云端下发 runtime.register 指令，本机校验二进制并探测版本后登记</span>
+        </div>
+        <div id="rt-form" class="hidden">
+          <div class="form-row">
+            <label>类型</label>
+            <select id="rt-type"><option value="gsagent">gsagent（自定义二进制，gsagent 协议）</option><option value="claude-code">claude-code</option></select>
+            <label>路径</label><input id="rt-path" style="flex:1" placeholder="设备上的二进制绝对路径，如 /usr/local/bin/my-agent">
+          </div>
+          <div class="form-row">
+            <label>参数</label><input id="rt-args" style="flex:1" placeholder="启动参数，逗号分隔（可选）">
+            <label>环境</label><input id="rt-env" style="flex:1" placeholder="K=V，逗号分隔（可选）">
+            <button class="small primary" id="rt-create">创建</button>
+          </div>
+          <div id="rt-out" class="muted"></div>
+        </div>` : ''}
         <table><tr><th>运行时 ID</th><th>类型</th><th>版本</th><th>状态</th><th>来源</th><th>路径</th></tr>
         ${(runtimes || []).map(r => `<tr>
           <td title="${App.esc(r.runtime_id)}">${App.esc(r.runtime_id.slice(0, 15))}…</td>
@@ -132,6 +150,33 @@
           const labels = document.getElementById('dev-labels').value.split(',').map(x => x.trim()).filter(Boolean);
           try { await API.post(`${API_}/devices/${id}/labels`, { labels }); App.toast('标签已保存'); detail(id); } catch (e) { App.toast(e.message, true); }
         };
+        // 添加运行时（创建即绑定本机）：runtime.register 指令 + 回执等待
+        const addBtn = document.getElementById('rt-add');
+        if (addBtn) {
+          addBtn.onclick = () => document.getElementById('rt-form').classList.toggle('hidden');
+          document.getElementById('rt-create').onclick = async () => {
+            const type = document.getElementById('rt-type').value;
+            const path = document.getElementById('rt-path').value.trim();
+            if (!path) { App.toast('填运行时二进制路径', true); return; }
+            const args = document.getElementById('rt-args').value.split(',').map(x => x.trim()).filter(Boolean);
+            const env = {};
+            document.getElementById('rt-env').value.split(',').map(x => x.trim()).filter(Boolean).forEach(kv => {
+              const [k, ...rest] = kv.split('='); if (k) env[k] = rest.join('=');
+            });
+            const outEl = document.getElementById('rt-out');
+            outEl.textContent = '下发 runtime.register 指令，等待本机校验…';
+            try {
+              const r0 = await API.post(`${API_}/commands`, { device_id: id, cmd_type: 'runtime.register',
+                payload: { type, path, args, env }, ttl_seconds: 120 });
+              const r = await API.pollCmd(r0.cmd_id);
+              if (r.ok) {
+                outEl.textContent = `已登记：${r.data.runtime_id}（版本探测 ${r.data.ok ? '成功' : '失败'}）`;
+                App.toast('运行时已创建并绑定本机');
+                detail(id);
+              } else { outEl.textContent = '登记失败：' + r.error; App.toast('登记失败', true); }
+            } catch (e) { outEl.textContent = e.message; App.toast(e.message, true); }
+          };
+        }
       }
     }
 

@@ -13,6 +13,20 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
+// gsIDAny 取第一个 gsagent 运行时 id。
+func gsIDAny(rts []struct {
+	RuntimeID string `json:"runtime_id"`
+	Type      string `json:"type"`
+	OK        bool   `json:"ok"`
+}) string {
+	for _, rt := range rts {
+		if rt.Type == "gsagent" {
+			return rt.RuntimeID
+		}
+	}
+	return ""
+}
+
 func TestRuntimeLifecycle(t *testing.T) {
 	c := setupAll(t)
 	d := c.spawnDevice(t, "rt-host")
@@ -72,6 +86,26 @@ func TestRuntimeLifecycle(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("gsagent runtime not reported: %+v", rts)
+	}
+
+	// 全局运行时列表（任务/操作页选择器数据源）：含设备主机名
+	gb, err := c.admin("GET", "/api/v1/admin/runtimes", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var global []struct {
+		RuntimeID string `json:"runtime_id"`
+		Hostname  string `json:"hostname"`
+	}
+	_ = json.Unmarshal(gb, &global)
+	gFound := false
+	for _, g := range global {
+		if g.RuntimeID == gsIDAny(rts) && g.Hostname != "" {
+			gFound = true
+		}
+	}
+	if !gFound {
+		t.Fatalf("global runtimes missing entry: %+v", global)
 	}
 
 	// 2. 任务按 runtime_id 精确指派

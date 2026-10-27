@@ -78,6 +78,11 @@ gs-cloud runtime register --device ID --type gsagent --path ./my-agent --arg X -
 gs-cloud task create --device ID --prompt P --runtime <runtime_id>  # 任务精确指派到某个运行时
 ```
 
+**控制台操作**（任务与操作页，multica 产品思路——指派粒度 = 运行时，天然绑定机器）：
+- 顶部「选择运行时」下拉列出所有在线设备上的可用 agent 实例（`主机名 · 类型 版本 [标签]`）
+- 扫描 skill / 获取全部 skill / 探测 agent：一键下发到所选运行时所在机器，回执自动展示
+- 「设备」详情页 → 运行时区块 → 「添加运行时」：创建即绑定该机器（云端下发 runtime.register 指令，本机校验二进制并探测版本后登记）
+
 - **身份**：`runtime_id = derive(type+path)`，单机内稳定（重装/重启不变）
 - **上报**：hello 携带全量 + 每 5 分钟 `runtime.sync` 周期同步；控制台「设备」详情可见
 - **指派**：`task.start` 带 `runtime_id` 时精确到实例（多 agent 机器必备）；任务记录执行所用运行时

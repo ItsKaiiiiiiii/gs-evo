@@ -171,6 +171,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/admin/devices/{id}/labels", s.authAdmin(s.handleSetDeviceLabels))
 	mux.HandleFunc("GET /api/v1/admin/devices/{id}/installs", s.authAny(s.handleDeviceInstalls))
 	mux.HandleFunc("GET /api/v1/admin/devices/{id}/runtimes", s.authAny(s.handleDeviceRuntimes))
+	mux.HandleFunc("GET /api/v1/admin/runtimes", s.authAny(s.handleListRuntimes))
 	mux.HandleFunc("GET /api/v1/admin/skills/{name}/coverage", s.authAny(s.handleSkillCoverage))
 	mux.HandleFunc("GET /api/v1/admin/evaluations", s.authAny(s.handleRecentEvaluations))
 	mux.HandleFunc("GET /api/v1/admin/tokens", s.authAny(s.handleListTokens))
@@ -604,6 +605,16 @@ func (s *Server) handleDeviceInstalls(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, installs)
+}
+
+// handleListRuntimes 全局运行时列表（任务/操作页选择器，含设备主机名）。
+func (s *Server) handleListRuntimes(w http.ResponseWriter, r *http.Request) {
+	rts, err := s.st.ListRuntimes()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, rts)
 }
 
 // handleDeviceRuntimes 设备详情：运行时列表（D14）。

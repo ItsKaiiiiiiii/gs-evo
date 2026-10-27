@@ -371,7 +371,8 @@ gs-evo/
 - **身份**：`runtime_id = derive(type + path)`——重装/重启稳定；同类型多实例（不同路径）各自成体；
 - **同步**：hello 携带全量 + 每 5 分钟 `runtime.sync` 周期上报，云端 runtime 表 upsert；
 - **指派**：`task.start` 可带 `runtime_id`（优先于 `agent_type`），任务记录执行所用 runtime——评估结果绑定执行环境；
-- **创建**：`runtime.register` 指令（审计页可见 created_by）——worker 校验二进制存在并探测版本后才持久化到 state.json（source=registered，含 args/env）。
+- **创建**：`runtime.register` 指令（审计页可见 created_by）——worker 校验二进制存在并探测版本后才持久化到 state.json（source=registered，含 args/env）；
+- **控制台产品形态**（multica 思路）：指派粒度 = 运行时而非设备。「任务与操作」页顶部为运行时选择器（`主机名 · 类型 版本 [标签]`，来自全局 `GET /admin/runtimes`），扫描/获取/任务均指派到所选运行时所在机器；「设备」详情的运行时区块提供「添加运行时」（创建即绑定该机器，走 runtime.register 指令）。
 
 ## 7. 关键流程
 
