@@ -104,16 +104,17 @@ func (e *Engine) finishTask(t *activeTask) {
 	e.mu.Unlock()
 }
 
+// defaultAgentType 未指定 agent 时的选择：
+// 配置了 agent_path = 用户自带 agent（说 gsagent 内部协议，见 docs/AGENT-PROTOCOL.md §4）；
+// 否则探测本机 agent（claude-code 优先）。
 func (e *Engine) defaultAgentType() string {
-	for _, a := range e.ProbeAgents(context.Background()) {
-		if a.OK {
-			if a.Type == "claude-code" {
-				return "claude-code"
-			}
-		}
-	}
 	if e.Cfg.AgentPath != "" {
 		return "gsagent"
+	}
+	for _, a := range e.ProbeAgents(context.Background()) {
+		if a.OK && a.Type == "claude-code" {
+			return "claude-code"
+		}
 	}
 	return "claude-code"
 }
@@ -166,8 +167,6 @@ func (e *Engine) handleTaskStart(ctx context.Context, payload map[string]any) (m
 	binPath := ""
 	if agentType == "gsagent" || agentType == "mock" {
 		binPath = e.Cfg.AgentPath
-	} else if e.Cfg.AgentPath != "" {
-		binPath = e.Cfg.AgentPath // 显式指定二进制时交给对应 adapter 使用
 	}
 
 	cmd, err := e.startAgent(agentType, &startOpts{binPath: binPath, prompt: p.Prompt, permission: perm})
@@ -176,7 +175,11 @@ func (e *Engine) handleTaskStart(ctx context.Context, payload map[string]any) (m
 		return nil, err
 	}
 	cmd.Dir = workdir
-	cmd.Env = envFor(p.Env)
+	cmd.Env = envFor(p.Env, e.Cfg.AgentEnv) // 任务 env 覆盖 + 本地 agent_env（P2-9）
+	if agentType == "gsagent" || agentType == "mock" {
+		cmd.Args = append(cmd.Args, e.Cfg.AgentArgs...)
+		cmd.Path = e.Cfg.AgentPath // gsagent 的参数由 exec.Command 组装后需重设 Path
+	}
 	prepareProc(cmd) // POSIX 进程组 / Windows 挂起创建（§6）
 
 	stdin, _ := cmd.StdinPipe()
@@ -290,7 +293,11 @@ func (e *Engine) handleTaskStart(ctx context.Context, payload map[string]any) (m
 		summary = strings.TrimSpace(stderrTail.String())
 	}
 	if summary == "" {
-		summary = reason
+		if exitCode == 0 {
+			summary = "agent finished without producing output（检查 agent 是否按 docs/AGENT-PROTOCOL.md §4 输出 result 行）"
+		} else {
+			summary = fmt.Sprintf("agent exited with code %d, no output captured", exitCode)
+		}
 	}
 	if len(summary) > 8*1024 {
 		summary = summary[:8*1024] + "…(truncated)"
@@ -403,9 +410,15 @@ func (e *Engine) sendTaskEvent(ev proto.TaskEvent) {
 	_ = ws.WriteMessage(websocket.TextMessage, b) // 写失败仅丢帧，重放兜底
 }
 
-// envFor 继承 worker 环境 + 显式覆盖（D12：密钥用本机已有，云端不下发）。
-func envFor(overrides map[string]string) []string {
+// envFor 继承 worker 环境 + 本地 agent_env（"K=V"）+ 任务显式覆盖
+// （D12：密钥用本机已有，云端不下发）。
+func envFor(overrides map[string]string, extraKV []string) []string {
 	env := os.Environ()
+	for _, kv := range extraKV {
+		if strings.Contains(kv, "=") {
+			env = append(env, kv)
+		}
+	}
 	for k, v := range overrides {
 		env = append(env, k+"="+v)
 	}

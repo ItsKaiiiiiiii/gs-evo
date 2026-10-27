@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -145,6 +146,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/admin/skills/{name}/evaluate", s.authAdmin(s.handleEvaluate))
 	mux.HandleFunc("GET /api/v1/admin/skills/{name}/versions/{version}/runs", s.authAny(s.handleListRuns))
 	mux.HandleFunc("GET /api/v1/admin/skills/{name}/versions/{version}/diff", s.authAny(s.handleVersionDiff))
+	mux.HandleFunc("GET /api/v1/admin/skills/{name}/auto-policy", s.authAny(s.handleGetAutoPolicy))
 	mux.HandleFunc("POST /api/v1/admin/skills/{name}/auto-policy", s.authAdmin(s.handleAutoPolicy))
 
 	// 运营面（P4）
@@ -160,6 +162,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/admin/tasks/{id}/events", s.authAdmin(s.handleTaskEvents))
 	mux.HandleFunc("POST /api/v1/admin/tasks/{id}/cancel", s.authAdmin(s.handleTaskCancel))
 	mux.HandleFunc("POST /api/v1/admin/devices/{id}/disconnect", s.authAdmin(s.handleDisconnectDevice))
+	mux.HandleFunc("POST /api/v1/admin/devices/{id}/labels", s.authAdmin(s.handleSetDeviceLabels))
 	return mux
 }
 
@@ -191,8 +194,14 @@ func (s *Server) authAny(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) authAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.verifier.VerifyAdmin(r.Context(), r.Header.Get("Authorization")) {
+		role := s.verifier.VerifyAdminRole(r.Context(), r.Header.Get("Authorization"))
+		if role == "" {
 			writeErr(w, http.StatusUnauthorized, "invalid admin token")
+			return
+		}
+		if role != "admin" {
+			writeErr(w, http.StatusForbidden,
+				"insufficient role: this operation requires an admin token (current role: viewer)")
 			return
 		}
 		next(w, r)
@@ -255,10 +264,15 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "invalid or used enroll token")
 		return
 	}
+	deviceLabels := []string{}
+	if et.Label != "" {
+		deviceLabels = append(deviceLabels, et.Label) // enroll token 的 label 落到设备（rollout 圈定用）
+	}
 	d := &store.Device{
 		ID: req.DeviceID, Owner: et.CreatedBy,
 		TokenHash: proto.HashToken(token), TokenExpiresAt: time.Now().Add(tokenTTL),
 		Hostname: req.Hostname, OS: req.OS, Arch: req.Arch, WorkerVersion: req.WorkerVersion,
+		Labels: deviceLabels,
 	}
 	isNew, err := s.st.UpsertDeviceOnEnroll(tx, d)
 	if err != nil {
@@ -466,9 +480,16 @@ func (s *Server) onCmdResult(deviceID string, res *proto.CmdResult) {
 	}
 	switch cmd.CmdType {
 	case proto.CmdSkillsCollect:
+		ingest := "registered"
 		if err := s.svc.IngestCollectResult(deviceID, res); err != nil {
-			s.log.Warn("ingest collect failed", "device", deviceID, "err", err)
+			if strings.Contains(err.Error(), "already registered") {
+				ingest = "unchanged" // 内容与已有版本一致：明确告知而非静默
+			} else {
+				ingest = "error: " + err.Error()
+				s.log.Warn("ingest collect failed", "device", deviceID, "err", err)
+			}
 		}
+		s.appendCommandResult(cmd.ID, map[string]any{"ingest": ingest})
 	case proto.CmdSkillsInstall:
 		s.svc.OnInstallResult(deviceID, res)
 	case proto.CmdTaskStart:
@@ -515,8 +536,53 @@ func (s *Server) onTaskEvent(deviceID string, ev *proto.TaskEvent) {
 	}
 }
 
+// handleSetDeviceLabels 设置设备标签（rollout 圈定用）。
+func (s *Server) handleSetDeviceLabels(w http.ResponseWriter, r *http.Request) {
+	req, err := readBody[struct {
+		Labels []string `json:"labels"`
+	}](r)
+	if err != nil || req.Labels == nil {
+		writeErr(w, http.StatusBadRequest, "labels required (array of strings)")
+		return
+	}
+	if err := s.st.SetDeviceLabels(r.PathValue("id"), req.Labels); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	d, _ := s.st.GetDevice(r.PathValue("id"))
+	if d == nil {
+		writeErr(w, http.StatusNotFound, "device not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": d.ID, "labels": d.Labels})
+}
+
 func (s *Server) loadPending(deviceID string) ([]*store.Command, error) {
 	return s.st.PendingCommands(deviceID)
+}
+
+// appendCommandResult 把云端侧处理结论并入指令结果（用户查 cmd list 时能看到"收没收到、变没变"）。
+func (s *Server) appendCommandResult(cmdID string, extra map[string]any) {
+	cmd, err := s.st.GetCommand(cmdID)
+	if err != nil || cmd == nil || cmd.Result == nil {
+		return
+	}
+	merged := map[string]any{}
+	for k, v := range cmd.Result {
+		merged[k] = v
+	}
+	for k, v := range extra {
+		merged[k] = v
+	}
+	b, _ := json.Marshal(merged)
+	var m map[string]any
+	_ = json.Unmarshal(b, &m)
+	_, _ = s.st.DB.Exec(`UPDATE command SET result=? WHERE id=?`, mustJSON(m), cmdID)
+}
+
+func mustJSON(v any) []byte {
+	b, _ := json.Marshal(v)
+	return b
 }
 
 // ---- 管理面 handlers ----
@@ -554,9 +620,13 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]devView, 0, len(devs))
 	for _, d := range devs {
-		v := devView{ID: d.ID, Hostname: d.Hostname, OS: d.OS, Status: d.Status, LastAcked: d.LastAckedCmdSeq, Labels: d.Labels}
+		labels := d.Labels
+		if labels == nil {
+			labels = []string{}
+		}
+		v := devView{ID: d.ID, Hostname: d.Hostname, OS: d.OS, Status: d.Status, LastAcked: d.LastAckedCmdSeq, Labels: labels}
 		if d.LastSeen != nil {
-			v.LastSeen = d.LastSeen.Format(time.RFC3339)
+			v.LastSeen = d.LastSeen.UTC().Format(time.RFC3339)
 		}
 		out = append(out, v)
 	}
@@ -565,6 +635,10 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRevokeDevice(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if d, _ := s.st.GetDevice(id); d == nil {
+		writeErr(w, http.StatusNotFound, "device not found: "+id)
+		return
+	}
 	if err := s.verifier.RevokeDevice(id); err != nil {
 		writeErr(w, 500, err.Error())
 		return
@@ -589,7 +663,9 @@ func (s *Server) handleCreateCommand(w http.ResponseWriter, r *http.Request) {
 	switch req.CmdType {
 	case proto.CmdAgentProbe, proto.CmdSkillsScan, proto.CmdSkillsCollect, proto.CmdTaskEventsReplay:
 	default:
-		writeErr(w, http.StatusBadRequest, "cmd_type not allowed via raw endpoint: "+req.CmdType)
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf(
+			"cmd_type %q not allowed here; allowed: %s, %s, %s, %s（skill 安装请用 skill install，任务请用 task create）",
+			req.CmdType, proto.CmdAgentProbe, proto.CmdSkillsScan, proto.CmdSkillsCollect, proto.CmdTaskEventsReplay))
 		return
 	}
 	if d, _ := s.st.GetDevice(req.DeviceID); d == nil {
@@ -620,13 +696,48 @@ func (s *Server) handleCreateCommand(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListCommands(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.URL.Query().Get("device_id")
+	cmdID := r.URL.Query().Get("cmd_id")
 	limit := atoiDefault(r.URL.Query().Get("limit"), 100)
+	if cmdID != "" { // CLI 回执轮询路径：按 cmd_id 精确查
+		c, err := s.st.GetCommand(cmdID)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		out := []*store.Command{}
+		if c != nil {
+			out = append(out, c)
+		}
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
 	cmds, err := s.st.ListCommands(deviceID, limit)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	for _, c := range cmds {
+		elideBundleB64(c.Payload)
+		elideBundleB64(c.Result)
+	}
 	writeJSON(w, http.StatusOK, cmds)
+}
+
+// elideBundleB64 就地替换超大 base64 块为占位说明（P3-5：别淹没 status/result）。
+func elideBundleB64(m map[string]any) {
+	if m == nil {
+		return
+	}
+	for k, v := range m {
+		switch t := v.(type) {
+		case string:
+			if (k == "bundle_b64" || strings.HasSuffix(k, "_b64")) && len(t) > 128 {
+				m[k] = fmt.Sprintf("<base64:%d bytes omitted>", len(t))
+			}
+		case map[string]any:
+			elideBundleB64(t)
+		}
+	}
 }
 
 func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
@@ -634,6 +745,9 @@ func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
+	}
+	if skills == nil {
+		skills = []*store.SkillRow{}
 	}
 	writeJSON(w, http.StatusOK, skills)
 }
@@ -643,6 +757,9 @@ func (s *Server) handleListVersions(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
+	}
+	if versions == nil {
+		versions = []*store.SkillVersionRow{}
 	}
 	writeJSON(w, http.StatusOK, versions)
 }

@@ -101,6 +101,16 @@ func (s *Store) ListDevices() ([]*Device, error) {
 	return out, rows.Err()
 }
 
+// SetDeviceLabels 设置设备标签（rollout 圈定）。
+func (s *Store) SetDeviceLabels(id string, labels []string) error {
+	b, err := json.Marshal(labels)
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.Exec(`UPDATE device SET labels=? WHERE id=?`, string(b), id)
+	return err
+}
+
 // RevokeDevice 吊销：置 revoked + token 立即失效（哈希列替换为占位值，唯一索引不冲突）。
 func (s *Store) RevokeDevice(id string) error {
 	_, err := s.DB.Exec(`UPDATE device SET status='revoked',

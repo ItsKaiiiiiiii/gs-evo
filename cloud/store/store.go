@@ -6,6 +6,7 @@ package store
 import (
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -25,6 +26,18 @@ type Store struct {
 
 // ErrNotFound 通用“不存在”（包内各查询返回 nil, nil 表示未命中）。
 var ErrNotFound = errors.New("not found")
+
+// NullTime JSON 友好的可空时间（防 sql.NullTime 泄漏 Go 内部结构）。
+type NullTime struct {
+	sql.NullTime
+}
+
+func (t NullTime) MarshalJSON() ([]byte, error) {
+	if !t.Valid {
+		return []byte(`null`), nil
+	}
+	return json.Marshal(t.Time.UTC().Format(time.RFC3339Nano))
+}
 
 // Open 连接 MySQL 并应用内嵌迁移。
 func Open(dsn string) (*Store, error) {

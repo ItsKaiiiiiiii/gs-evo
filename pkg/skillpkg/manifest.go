@@ -21,6 +21,9 @@ func ScanDir(root string, installedHashes map[string]string) ([]proto.Manifest, 
 		if !e.IsDir() {
 			continue
 		}
+		if strings.HasSuffix(e.Name(), ".prev") || strings.Contains(e.Name(), ".gs-evo-") {
+			continue // 安装备份/内部目录不是 skill（P3-3）
+		}
 		dir := filepath.Join(root, e.Name())
 		if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); err != nil {
 			continue // 无 SKILL.md 不是 skill

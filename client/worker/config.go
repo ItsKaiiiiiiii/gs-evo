@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-
-	"github.com/ItsKaiiiiiiii/gs-evo/pkg/proto"
 )
 
 const WorkerVersion = "0.1.0"
@@ -22,10 +20,12 @@ type Config struct {
 	Token     string   `json:"-" toml:"token"`
 	Roots     []string `toml:"roots" ` // skill 目录白名单
 
-	MaxConcurrency int    `toml:"max_concurrency"`
-	SigningPubkey  string `toml:"signing_pubkey"` // ed25519 hex（装 stable 包必填，D8）
-	AgentPath      string `toml:"agent_path"`     // agent 二进制显式路径（测试/非 PATH 安装）
-	UpdateStub     bool   `toml:"update_stub"`    // true: 自更新只下载验签落盘，不替换自身（测试）
+	MaxConcurrency int      `toml:"max_concurrency"`
+	SigningPubkey  string   `toml:"signing_pubkey"` // ed25519 hex（装 stable 包必填，D8）
+	AgentPath      string   `toml:"agent_path"`     // agent 二进制显式路径（说 gsagent 协议，见 docs/AGENT-PROTOCOL.md）
+	AgentArgs      []string `toml:"agent_args"`     // 追加给 agent 的启动参数
+	AgentEnv       []string `toml:"agent_env"`      // 追加给 agent 的环境变量（"K=V" 形式）
+	UpdateStub     bool     `toml:"update_stub"`    // true: 自更新只下载验签落盘，不替换自身（测试）
 
 	PermissionMode string `toml:"permission_mode"` // P2 生效，预置 readonly
 	RequireConfirm bool   `toml:"require_confirm"` // P2 生效，预置 false
@@ -153,19 +153,22 @@ func (h Home) SaveState(st *State) {
 	_ = atomicWrite(h.StatePath(), b, 0o600)
 }
 
-// DeviceID 本机持久身份（UUIDv7，与 token 分离存放，§6.7）。
-func (h Home) DeviceID() (string, error) {
-	if b, err := os.ReadFile(h.DeviceIDPath()); err == nil && len(strings.TrimSpace(string(b))) > 0 {
-		return strings.TrimSpace(string(b)), nil
+// LoadDeviceID 读取已有本机身份（没有不创建——注册成功才落盘，避免失败残留）。
+func (h Home) LoadDeviceID() (string, bool) {
+	if b, err := os.ReadFile(h.DeviceIDPath()); err == nil {
+		if id := strings.TrimSpace(string(b)); id != "" {
+			return id, true
+		}
 	}
-	id := proto.NewDeviceID()
+	return "", false
+}
+
+// SaveDeviceID 本机持久身份（UUIDv7，与 token 分离存放，§6.7）。
+func (h Home) SaveDeviceID(id string) error {
 	if err := os.MkdirAll(h.Dir, 0o700); err != nil {
-		return "", err
+		return err
 	}
-	if err := atomicWrite(h.DeviceIDPath(), []byte(id+"\n"), 0o600); err != nil {
-		return "", err
-	}
-	return id, nil
+	return atomicWrite(h.DeviceIDPath(), []byte(id+"\n"), 0o600)
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {

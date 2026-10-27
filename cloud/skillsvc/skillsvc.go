@@ -29,8 +29,8 @@ var transitions = map[string][]string{
 }
 
 var ErrNotFound = errors.New("skill or version not found")
-var ErrBadTransition = errors.New("invalid status transition")
-var ErrNotStable = errors.New("version is not stable (must be signed stable to install, D8/D9)")
+var ErrBadTransition = errors.New("invalid status transition (valid chain: draft → candidate → reviewed → stable; any → deprecated)")
+var ErrNotStable = errors.New("version is not stable: only reviewed+stable versions (signed by the cloud) can be installed; run `gs-cloud skill set-status --name N --version V --status stable` first")
 
 type Service struct {
 	st        *store.Store
@@ -103,7 +103,16 @@ func (s *Service) IngestCollectResult(deviceID string, res *proto.CmdResult) err
 	}
 	if dup {
 		s.log.Info("collect dedup: content already registered", "skill", cr.Name, "sha", sha[:8])
-		return tx.Commit()
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		return fmt.Errorf("content already registered (unchanged)")
+	}
+	// 版本号冲突预检：同版本号 + 不同内容 → 给用户可行动的话术（而非裸 MySQL 1062）
+	if existing, err := s.st.GetVersion(cr.Name, cr.Version); err == nil && existing != nil {
+		return fmt.Errorf(
+			"version %s already exists with different content — 请修改 SKILL.md front-matter 里的 version 字段（如改为 %s）后重新收集",
+			cr.Version, nextIncrease(cr.Version))
 	}
 	manifest, _ := json.Marshal(map[string]any{
 		"name": cr.Name, "version": cr.Version, "content_hash": cr.ContentHash, "size": cr.Size,
@@ -313,4 +322,13 @@ func trimHashPrefix(h string) string {
 func sha256HexOf(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+// nextIncrease 版本号 +1 的友好提示（非整数则原样返回加后缀建议）。
+func nextIncrease(v string) string {
+	var n int
+	if _, err := fmt.Sscanf(v, "%d", &n); err == nil && fmt.Sprint(n) == v {
+		return fmt.Sprint(n + 1)
+	}
+	return v + ".1"
 }

@@ -380,11 +380,6 @@ func (e *Engine) wsEndpoint() (string, error) {
 }
 
 func (e *Engine) buildHello() (*proto.Hello, error) {
-	id, err := e.Home.DeviceID()
-	if err != nil {
-		return nil, err
-	}
-	_ = id
 	host, _ := os.Hostname()
 	h := &proto.Hello{
 		Type:         proto.TypeHello,

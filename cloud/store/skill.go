@@ -19,11 +19,11 @@ func newUUIDBytes() []byte {
 
 // SkillRow / SkillVersionRow：§8 数据模型。
 type SkillRow struct {
-	ID           string       `json:"id"`
-	Name         string       `json:"name"`
-	LatestStable string       `json:"latest_stable"`
-	LatestAny    string       `json:"latest_any"`
-	CreatedAt    sql.NullTime `json:"created_at"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	LatestStable string   `json:"latest_stable"`
+	LatestAny    string   `json:"latest_any"`
+	CreatedAt    NullTime `json:"created_at"`
 }
 
 type SkillVersionRow struct {
@@ -40,7 +40,7 @@ type SkillVersionRow struct {
 	ParentVersion string          `json:"parent_version,omitempty"`
 	Status        string          `json:"status"`
 	Rationale     string          `json:"rationale,omitempty"`
-	CreatedAt     sql.NullTime    `json:"created_at"`
+	CreatedAt     NullTime        `json:"created_at"`
 }
 
 const skillCols = `s.id, s.name, s.latest_stable, s.latest_any, s.created_at`

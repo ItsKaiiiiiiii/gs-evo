@@ -147,7 +147,8 @@ func TestP3_EvolutionLoop(t *testing.T) {
 		}
 	}
 	inst := c.installAndWait(t, "hello-evo", v2.Version, root, devID, "")
-	if inst["result"] != "installed" {
+	// 评估阶段已灰度安装过 v2 → 幂等短路返回 already_installed（防 .prev 被重复安装覆盖）
+	if inst["result"] != "installed" && inst["result"] != "already_installed" {
 		t.Fatalf("final install: %v", inst)
 	}
 	got, _ := os.ReadFile(filepath.Join(root, "hello-evo", "SKILL.md"))

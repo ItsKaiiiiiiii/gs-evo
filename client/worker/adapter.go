@@ -38,7 +38,8 @@ func (e *Engine) startAgent(agentType string, opts *startOpts) (*exec.Cmd, error
 		if bin == "" {
 			return nil, fmt.Errorf("agent_path required for gsagent")
 		}
-		return exec.Command(bin), nil
+		cmd := exec.Command(bin, opts.args...)
+		return cmd, nil
 	case "claude-code", "":
 		args := []string{"-p", opts.prompt, "--output-format", "stream-json", "--verbose",
 			"--permission-mode", claudePermMode(opts.permission)}
@@ -57,6 +58,7 @@ func (e *Engine) startAgent(agentType string, opts *startOpts) (*exec.Cmd, error
 
 type startOpts struct {
 	binPath    string
+	args       []string
 	prompt     string
 	permission string
 }

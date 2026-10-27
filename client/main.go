@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -25,15 +26,21 @@ import (
 
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	fs := flag.NewFlagSet("gs-worker", flag.ExitOnError)
-	homeFlag := fs.String("home", "", "override worker home dir (default ~/.gs-agent-worker)")
+	fs := flag.NewFlagSet("gs-worker", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	homeFlag := fs.String("home", "", "worker 数据目录（默认 ~/.gs-agent-worker）")
 	if err := fs.Parse(os.Args[1:]); err != nil {
+		usage()
 		os.Exit(2)
 	}
 	args := fs.Args()
-	if len(args) == 0 {
+	// --help/-h 任何位置：打印完整帮助并 exit 0（P2-8）
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		usage()
-		os.Exit(2)
+		if len(args) == 0 {
+			os.Exit(2)
+		}
+		return
 	}
 	home := worker.DefaultHome()
 	if *homeFlag != "" {
@@ -63,13 +70,18 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `usage: gs-worker [-home DIR] <command>
+	fmt.Fprint(os.Stdout, `usage: gs-worker [-home DIR] <command> [flags]
 
-  daemon                       run the worker daemon (foreground)
-  login --server URL --enroll TOK | -
-  status                       show local state
-  skills list | rollback NAME
-  probe                        detect local coding agents
+commands:
+  daemon                       前台运行守护进程
+  login --server URL --enroll TOK
+                               注册本机到云端（TOK 为一次性 enroll token；
+                               --skills-root 设置 skill 白名单目录，
+                               --signing-pubkey 设置安装验签公钥）
+  status                       查看本机配置与已装 skill
+  probe                        探测本机可用的 coding agent
+  skills list                  列出白名单目录中的 skill
+  skills rollback NAME         回滚到上一版本（.prev）
 `)
 }
 
@@ -100,9 +112,9 @@ func cmdLogin(home worker.Home, args []string) error {
 	if !strings.HasPrefix(tok, proto.TokenPrefixEnroll) {
 		return fmt.Errorf("token does not look like an enroll token (%s…)", proto.TokenPrefixEnroll)
 	}
-	deviceID, err := home.DeviceID()
-	if err != nil {
-		return err
+	deviceID, hadID := home.LoadDeviceID()
+	if !hadID {
+		deviceID = proto.NewDeviceID()
 	}
 	host, _ := os.Hostname()
 	body, _ := json.Marshal(map[string]string{
@@ -119,6 +131,10 @@ func cmdLogin(home worker.Home, args []string) error {
 	}
 	if err := json.Unmarshal(resp, &out); err != nil || out.DeviceToken == "" {
 		return fmt.Errorf("bad enroll response")
+	}
+	// 注册成功才持久化本机身份（失败不残留）
+	if err := home.SaveDeviceID(deviceID); err != nil {
+		return err
 	}
 	cfg := &worker.Config{
 		ServerURL:      strings.TrimSuffix(*server, "/"),
@@ -144,7 +160,11 @@ func cmdDaemon(home worker.Home, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	log.Info("gs-worker daemon starting", "home", home.Dir, "server", eng.Cfg.ServerURL)
-	return eng.Run(ctx)
+	if err := eng.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		return err
+	}
+	log.Info("daemon stopped")
+	return nil
 }
 
 func cmdStatus(home worker.Home) error {
@@ -153,7 +173,10 @@ func cmdStatus(home worker.Home) error {
 		return err
 	}
 	st := home.LoadState()
-	id, _ := home.DeviceID()
+	id, _ := home.LoadDeviceID()
+	if id == "" {
+		id = "(未注册)"
+	}
 	spool, _ := os.ReadDir(home.SpoolDir())
 	fmt.Printf("home:        %s\n", home.Dir)
 	fmt.Printf("device_id:   %s\n", id)

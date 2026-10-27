@@ -209,13 +209,19 @@ func (e *Engine) handleInstall(ctx context.Context, payload map[string]any) (map
 	// 4. 冲突检测：磁盘 hash vs state.json 记录（C6）
 	ir := proto.InstallResult{Name: p.Name, EvaluationRunID: p.EvaluationRunID}
 	prev := "none"
+	var expected string
 	if rec, exists := e.State.Installed[p.Name]; exists {
 		prev = rec.Version
+		expected = rec.ContentHash
 	}
 	if actualDirHash, dirErr := skillHashDir(target); dirErr == nil {
-		expected := ""
-		if rec, exists := e.State.Installed[p.Name]; exists {
-			expected = rec.ContentHash
+		// 幂等短路：同版本 + 内容一致 → 不动 .prev（防重复安装毁掉回滚备份）
+		if expected != "" && actualDirHash == expected && prev == p.Version {
+			ir.Result = "already_installed"
+			ir.Installed = p.Version
+			ir.Replaced = prev
+			data, _ := structToMap(ir)
+			return data, nil
 		}
 		if expected != "" && actualDirHash != expected && p.OnConflict != "overwrite" {
 			ir.Result = "conflict_skipped"

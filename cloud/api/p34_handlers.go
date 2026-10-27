@@ -45,7 +45,11 @@ func (s *Server) handleCreateBenchmark(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, b)
+	fresh, _ := s.st.GetBenchmarkSet(b.ID)
+	if fresh == nil {
+		fresh = b
+	}
+	writeJSON(w, http.StatusOK, fresh)
 }
 
 func (s *Server) handleListBenchmarks(w http.ResponseWriter, r *http.Request) {
@@ -161,15 +165,35 @@ func (s *Server) handleVersionDiff(w http.ResponseWriter, r *http.Request) {
 
 // ---- 自动发布策略（⑤受控豁免，默认关闭）----
 
+// handleGetAutoPolicy 查看当前策略。
+func (s *Server) handleGetAutoPolicy(w http.ResponseWriter, r *http.Request) {
+	p, err := s.st.GetAutoPolicy(r.PathValue("name"))
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if p == nil {
+		p = &store.AutoPolicy{}
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
 func (s *Server) handleAutoPolicy(w http.ResponseWriter, r *http.Request) {
 	req, err := readBody[store.AutoPolicy](r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if req.Enabled && (req.MinRuns < 1 || req.MinPassRate <= 0 || req.MinPassRate > 1) {
-		writeErr(w, http.StatusBadRequest, "min_runs>=1 and 0<min_pass_rate<=1 required")
-		return
+	if req.Enabled {
+		if req.MinRuns < 1 || req.MinPassRate <= 0 || req.MinPassRate > 1 {
+			writeErr(w, http.StatusBadRequest, "min_runs>=1 and 0<min_pass_rate<=1 required")
+			return
+		}
+		if req.TargetRoot == "" {
+			writeErr(w, http.StatusBadRequest,
+				"target_root required: auto rollout installs to <target_root>/<skill>（各机器白名单路径可能不同，务必与设备侧一致）")
+			return
+		}
 	}
 	if err := s.st.SetAutoPolicy(r.PathValue("name"), req); err != nil {
 		writeErr(w, 500, err.Error())
@@ -372,12 +396,25 @@ func (s *Server) setupEvolution() {
 		if env == nil {
 			env = map[string]string{}
 		}
+		taskID := proto.NewID("t-")
+		// 评估任务入存储：task events 可查（否则 events 404）
+		if err := s.st.CreateTask(&store.TaskRow{
+			ID: taskID, DeviceID: deviceID, Prompt: prompt, AgentType: agentType,
+			CreatedBy: "evaluation:" + eng.CurrentRunID(),
+		}); err != nil {
+			return nil, err
+		}
 		payload, _ := json.Marshal(proto.TaskStartPayload{
-			TaskID: proto.NewID("t-"), Prompt: prompt, AgentType: agentType, TimeoutS: timeoutS, Env: env,
+			TaskID: taskID, Prompt: prompt, AgentType: agentType, TimeoutS: timeoutS, Env: env,
 		})
 		var pm map[string]any
 		_ = json.Unmarshal(payload, &pm)
-		return s.CreateDeviceCommand(ctx, deviceID, proto.CmdTaskStart, pm, "admin")
+		cmd, err := s.CreateDeviceCommand(ctx, deviceID, proto.CmdTaskStart, pm, "admin")
+		if err != nil {
+			return nil, err
+		}
+		_ = s.st.SetTaskCmdID(taskID, cmd.ID)
+		return cmd, nil
 	}
 	s.evo = eng
 }

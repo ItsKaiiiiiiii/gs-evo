@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ItsKaiiiiiiii/gs-evo/cloud/store"
@@ -34,6 +35,9 @@ type Engine struct {
 	privHex   string
 	Gen       Generator
 
+	runMu      sync.Mutex
+	currentRun string
+
 	InstallIssuer InstallIssuer
 	TaskIssuer    TaskIssuer
 }
@@ -49,13 +53,38 @@ func (e *Engine) bundlePath(sha string) string {
 // BundlePath 导出：版本 diff 审阅需要读包内 SKILL.md。
 func (e *Engine) BundlePath(sha string) string { return e.bundlePath(sha) }
 
-// nextVersion：整数版本 +1；否则追加 ".evo<N>"。
-func nextVersion(parent string) string {
-	var n int
-	if _, err := fmt.Sscanf(parent, "%d", &n); err == nil && fmt.Sprint(n) == parent {
-		return fmt.Sprint(n + 1)
+// CurrentRunID 当前评估运行 id（评估任务入 task 存储的来源标注）。
+func (e *Engine) CurrentRunID() string {
+	e.runMu.Lock()
+	defer e.runMu.Unlock()
+	return e.currentRun
+}
+
+// nextVersionFrom 基于已有版本集合取未占用号：整数版本取 max+1，避免 parent+1 撞号。
+func nextVersionFrom(existing []string, parent string) string {
+	maxInt := 0
+	hasInt := false
+	used := map[string]bool{}
+	for _, v := range existing {
+		used[v] = true
+		var n int
+		if _, err := fmt.Sscanf(v, "%d", &n); err == nil && fmt.Sprint(n) == v {
+			hasInt = true
+			if n > maxInt {
+				maxInt = n
+			}
+		}
 	}
-	return parent + ".evo1"
+	if hasInt {
+		return fmt.Sprint(maxInt + 1)
+	}
+	// 全是非整数版本：parent.evo<N> 找空位
+	for i := 1; ; i++ {
+		cand := fmt.Sprintf("%s.evo%d", parent, i)
+		if !used[cand] {
+			return cand
+		}
+	}
 }
 
 // Evolve 基于指定（或最新 stable）版本生成进化候选。
@@ -91,7 +120,15 @@ func (e *Engine) Evolve(ctx context.Context, skillName, parentVersion, instructi
 		return nil, fmt.Errorf("extract parent SKILL.md: %w", err)
 	}
 
-	newVersion := nextVersion(parent.Version)
+	versions, err := e.st.ListVersions(skillName)
+	if err != nil {
+		return nil, err
+	}
+	existing := make([]string, 0, len(versions))
+	for _, v := range versions {
+		existing = append(existing, v.Version)
+	}
+	newVersion := nextVersionFrom(existing, parent.Version)
 	gen, err := e.Gen.Generate(ctx, skillName, string(parentMD), instruction)
 	if err != nil {
 		return nil, fmt.Errorf("generate: %w", err)
@@ -180,8 +217,12 @@ func (e *Engine) Evaluate(ctx context.Context, skillName, version, benchmarkSetI
 		return nil, fmt.Errorf("no gray devices given")
 	}
 
+	e.runMu.Lock()
+	e.currentRun = proto.NewID("er-")
+	runID := e.currentRun
+	e.runMu.Unlock()
 	run := &store.EvaluationRunRow{
-		ID: proto.NewID("er-"), SkillName: skillName, SkillVersion: version,
+		ID: runID, SkillName: skillName, SkillVersion: version,
 		BenchmarkSetID: benchmarkSetID, DeviceIDs: deviceIDs, CreatedBy: createdBy,
 	}
 	if err := e.st.CreateEvaluationRun(run); err != nil {
