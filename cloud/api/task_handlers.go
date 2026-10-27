@@ -17,6 +17,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		DeviceID      string            `json:"device_id"`
 		Prompt        string            `json:"prompt"`
 		AgentType     string            `json:"agent_type,omitempty"`
+		RuntimeID     string            `json:"runtime_id,omitempty"`
 		TimeoutS      int               `json:"timeout_s,omitempty"`
 		MaxPermission string            `json:"max_permission,omitempty"`
 		Env           map[string]string `json:"env,omitempty"`
@@ -39,8 +40,8 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	// 先建 task 行再发指令：否则首个 task.event 会先于任务落库到达而被丢弃
 	t := &store.TaskRow{
 		ID: taskID, DeviceID: req.DeviceID, Prompt: req.Prompt,
-		AgentType: req.AgentType, MaxPermission: req.MaxPermission,
-		CreatedBy: "admin",
+		AgentType: req.AgentType, RuntimeID: req.RuntimeID,
+		MaxPermission: req.MaxPermission, CreatedBy: "admin",
 	}
 	if err := s.st.CreateTask(t); err != nil {
 		writeErr(w, 500, err.Error())
@@ -48,7 +49,8 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	}
 	payload, _ := json.Marshal(proto.TaskStartPayload{
 		TaskID: taskID, Prompt: req.Prompt, AgentType: req.AgentType,
-		TimeoutS: req.TimeoutS, MaxPermission: req.MaxPermission, Env: req.Env,
+		RuntimeID: req.RuntimeID, TimeoutS: req.TimeoutS,
+		MaxPermission: req.MaxPermission, Env: req.Env,
 	})
 	var pm map[string]any
 	_ = json.Unmarshal(payload, &pm)

@@ -5,8 +5,12 @@ import "time"
 // P2 任务通道消息与载荷（§6.4、docs/AGENT-PROTOCOL.md）。
 
 const (
-	TypeTaskEvent = "task.event" // c→cloud 任务过程事件
+	TypeTaskEvent   = "task.event"   // c→cloud 任务过程事件
+	TypeRuntimeSync = "runtime.sync" // c→cloud 运行时列表同步（周期 + 变更即发）
 )
+
+// 指令类型（P5 运行时）
+const CmdRuntimeRegister = "runtime.register" // 云端要求 worker 登记一个运行时（受审计的"创建"入口）
 
 // 事件 kind（内部事件流 → 线上 kind 的映射见 AGENT-PROTOCOL.md §7）。
 const (
@@ -51,6 +55,7 @@ type TaskStartPayload struct {
 	TaskID        string            `json:"task_id"`
 	Prompt        string            `json:"prompt"`
 	AgentType     string            `json:"agent_type,omitempty"` // 空 = 首个可用 agent
+	RuntimeID     string            `json:"runtime_id,omitempty"` // 精确指派本机运行时（优先于 AgentType，D14）
 	TimeoutS      int               `json:"timeout_s,omitempty"`  // 看门狗，缺省 3600
 	MaxPermission string            `json:"max_permission,omitempty"`
 	Env           map[string]string `json:"env,omitempty"`
@@ -59,6 +64,7 @@ type TaskStartPayload struct {
 // TaskResult task.start 的 cmd_result.data（终态，经 spool 保证送达）。
 type TaskResult struct {
 	TaskID     string   `json:"task_id"`
+	RuntimeID  string   `json:"runtime_id,omitempty"`
 	Status     string   `json:"status"` // completed|failed|cancelled|timeout
 	Exit       int      `json:"exit"`
 	DurationMs int64    `json:"duration_ms"`
@@ -84,6 +90,29 @@ type TaskCancelPayload struct {
 type EventsReplayPayload struct {
 	TaskID  string `json:"task_id"`
 	FromSeq int64  `json:"from_seq"`
+}
+
+// RuntimeInfo 运行时（本机 agent 实例，一等实体）。
+type RuntimeInfo struct {
+	RuntimeID string `json:"runtime_id"` // 稳定身份：derive(type + path)
+	Type      string `json:"type"`
+	Version   string `json:"version,omitempty"`
+	Path      string `json:"path,omitempty"`
+	OK        bool   `json:"ok"`
+}
+
+// RuntimeSyncMsg c→cloud 运行时列表同步。
+type RuntimeSyncMsg struct {
+	Type     string        `json:"type"` // "runtime.sync"
+	Runtimes []RuntimeInfo `json:"runtimes"`
+}
+
+// RuntimeRegisterPayload runtime.register：云端要求 worker 登记运行时（受审计创建）。
+type RuntimeRegisterPayload struct {
+	Type string            `json:"type"` // gsagent | claude-code
+	Path string            `json:"path,omitempty"`
+	Args []string          `json:"args,omitempty"`
+	Env  map[string]string `json:"env,omitempty"`
 }
 
 // EventsReplayResult cmd_result.data。

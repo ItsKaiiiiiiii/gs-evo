@@ -106,6 +106,16 @@ func runWithCloud(m *testing.M) int {
 	return m.Run()
 }
 
+// sqlExecScan 查询单值（诊断用）。
+func sqlExecScan(query string, dest *int) error {
+	db, err := sql.Open("mysql", testDSN)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return db.QueryRow(query).Scan(dest)
+}
+
 // sqlExec 测试内直接执行 SQL（仅用于故障注入）。
 func sqlExec(dsn, query string, args ...any) error {
 	db, err := sql.Open("mysql", dsn)
@@ -129,6 +139,7 @@ type cloud struct {
 type device struct {
 	name   string
 	id     string
+	eng    *worker.Engine
 	home   worker.Home
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -280,6 +291,7 @@ func (d *device) start(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	d.eng = eng
 	eng.ExecHook = func(cmdID, cmdType string) {
 		d.execMu.Lock()
 		d.exec[cmdID]++
@@ -290,6 +302,7 @@ func (d *device) start(t *testing.T) {
 	d.done = make(chan struct{})
 	go func() {
 		_ = eng.Run(ctx)
+		eng.WaitIdle() // 在途指令收尾（防 TempDir 清理竞态）
 		close(d.done)
 	}()
 	devices[d.name] = d
@@ -366,6 +379,15 @@ func (r *cmdRow) dataOf() map[string]any {
 		return d
 	}
 	return map[string]any{}
+}
+
+// dataOfBool 取信封顶层 ok。
+func (r *cmdRow) dataOfBool() bool {
+	if r == nil || r.Result == nil {
+		return false
+	}
+	ok, _ := r.Result["ok"].(bool)
+	return ok
 }
 
 // issueCmd 下发指令并等待 acked，返回落库行。

@@ -26,7 +26,7 @@ type InstallIssuer func(ctx context.Context, skillName, version, targetRoot, onC
 	deviceIDs, labels []string, evaluationRunID string) ([]*store.Command, error)
 
 // TaskIssuer 任务下发回调（评估用例执行）。
-type TaskIssuer func(ctx context.Context, deviceID, prompt, agentType string, timeoutS int, env map[string]string) (*store.Command, error)
+type TaskIssuer func(ctx context.Context, deviceID, prompt, agentType, runtimeID string, timeoutS int, env map[string]string) (*store.Command, error)
 
 type Engine struct {
 	st        *store.Store
@@ -198,7 +198,7 @@ func (e *Engine) Evolve(ctx context.Context, skillName, parentVersion, instructi
 //	受控例外——candidate 允许装到指定设备（evaluationRunID 随安装指令留痕，普通 install 不放行）；
 //	逐 case 下发 task.start，聚合 pass/fail → EvaluationRun{metrics, verdict}。
 func (e *Engine) Evaluate(ctx context.Context, skillName, version, benchmarkSetID, createdBy string,
-	deviceIDs []string, install bool, targetRoot, agentType string) (*store.EvaluationRunRow, error) {
+	deviceIDs []string, install bool, targetRoot, agentType, runtimeID string) (*store.EvaluationRunRow, error) {
 	v, err := e.st.GetVersion(skillName, version)
 	if err != nil {
 		return nil, err
@@ -254,7 +254,7 @@ func (e *Engine) Evaluate(ctx context.Context, skillName, version, benchmarkSetI
 		if timeoutS <= 0 {
 			timeoutS = 60
 		}
-		cmd, err := e.TaskIssuer(ctx, deviceIDs[0], bc.Prompt, agentType, timeoutS, map[string]string{"MOCK_MODE": "ok"})
+		cmd, err := e.TaskIssuer(ctx, deviceIDs[0], bc.Prompt, agentType, runtimeID, timeoutS, map[string]string{"MOCK_MODE": "ok"})
 		if err != nil {
 			perCase = append(perCase, map[string]any{"case": bc.Name, "pass": false, "error": err.Error()})
 			continue

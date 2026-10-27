@@ -50,7 +50,7 @@ const (
 // SupportedCommands 客户端声明的能力集。
 var SupportedCommands = []string{
 	CmdAgentProbe, CmdSkillsScan, CmdSkillsCollect, CmdSkillsInstall,
-	CmdTaskStart, CmdTaskCancel, CmdTaskEventsReplay,
+	CmdTaskStart, CmdTaskCancel, CmdTaskEventsReplay, CmdRuntimeRegister,
 }
 
 // ---- 基础档案 ----
@@ -96,13 +96,14 @@ type SkillBrief struct {
 // ---- hello / hello_ok ----
 
 type Hello struct {
-	Type            string       `json:"type"`
-	ProtoVersion    int          `json:"proto_version"`
-	Device          DeviceInfo   `json:"device"`
-	Agents          []AgentInfo  `json:"agents"`
-	Skills          []SkillBrief `json:"skills"`
-	LastAckedCmdSeq int64        `json:"last_acked_cmd_seq"`
-	Capabilities    []string     `json:"capabilities"`
+	Type            string        `json:"type"`
+	ProtoVersion    int           `json:"proto_version"`
+	Device          DeviceInfo    `json:"device"`
+	Agents          []AgentInfo   `json:"agents"`   // 兼容字段（旧云端）；新云端读 Runtimes
+	Runtimes        []RuntimeInfo `json:"runtimes"` // 运行时一等实体（D14）
+	Skills          []SkillBrief  `json:"skills"`
+	LastAckedCmdSeq int64         `json:"last_acked_cmd_seq"`
+	Capabilities    []string      `json:"capabilities"`
 }
 
 // HelloOK 云端对账应答；PendingCommands 为全部未 ack 且未过期的指令（重连补发）。

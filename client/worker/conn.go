@@ -41,8 +41,9 @@ type Engine struct {
 	ExecHook func(cmdID, cmdType string)
 
 	handlers    map[string]HandlerFunc
-	sem         chan struct{} // 并发上限
-	mu          sync.Mutex    // 保护 State / tasks / currentConn
+	sem         chan struct{}  // 并发上限
+	wg          sync.WaitGroup // 在途指令 handler（stop 时等待收尾，防测试/退出竞态）
+	mu          sync.Mutex     // 保护 State / tasks / currentConn
 	tasks       map[string]*activeTask
 	currentConn *websocket.Conn
 	inflight    map[string]chan struct{} // 执行中的 cmd_id（防同毫秒重复投递双跑）
@@ -75,6 +76,7 @@ func NewEngine(h Home, log *slog.Logger) (*Engine, error) {
 	e.register(proto.CmdTaskCancel, e.handleTaskCancel)
 	e.register(proto.CmdTaskEventsReplay, e.handleEventsReplay)
 	e.register(proto.CmdClientUpdate, e.handleClientUpdate)
+	e.register(proto.CmdRuntimeRegister, e.handleRuntimeRegister)
 	return e, nil
 }
 
@@ -129,6 +131,7 @@ func (e *Engine) serveOnce(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	defer ws.Close()
+	e.startRuntimeSyncLoop(ctx)
 	e.mu.Lock()
 	e.currentConn = ws
 	e.mu.Unlock()
@@ -177,6 +180,7 @@ func (e *Engine) serveOnce(ctx context.Context) (bool, error) {
 	_ = ws.SetReadDeadline(time.Now().Add(readDeadline))
 	hello, _ := e.buildHello()
 	hb, _ := json.Marshal(hello)
+	e.Log.Debug("hello sending", "runtimes", len(hello.Runtimes), "agents", len(hello.Agents))
 	if werr := ws.WriteMessage(websocket.TextMessage, hb); werr != nil {
 		return true, werr
 	}
@@ -274,8 +278,9 @@ func (e *Engine) dispatch(ws *websocket.Conn, cmd *proto.Cmd) {
 		return
 	}
 
+	e.wg.Add(1)
 	go func() {
-		defer func() { <-e.sem }()
+		defer func() { <-e.sem; e.wg.Done() }()
 		defer func() {
 			if r := recover(); r != nil {
 				e.Log.Error("handler panic", "cmd_id", cmd.CmdID, "panic", r)
@@ -391,6 +396,12 @@ func (e *Engine) buildHello() (*proto.Hello, error) {
 		LastAckedCmdSeq: e.State.MaxSeq,
 	}
 	h.Agents = e.ProbeAgents(context.Background())
+	for _, rt := range e.buildRuntimes(context.Background()) {
+		h.Runtimes = append(h.Runtimes, proto.RuntimeInfo{
+			RuntimeID: rt.RuntimeID, Type: rt.Type, Version: rt.Version,
+			Path: rt.Path, OK: rt.OK,
+		})
+	}
 	// 已装 skill 清单（完整列表，§6.4）
 	installed := map[string]string{}
 	for name, rec := range e.State.Installed {
@@ -456,3 +467,6 @@ func min(a, b time.Duration) time.Duration {
 
 // Rollback 本地秒回滚的导出入口（CLI 与测试共用）。
 func (e *Engine) Rollback(name string) error { return e.rollbackLocal(name) }
+
+// WaitIdle 等待全部在途指令 handler 结束（测试/优雅退出用）。
+func (e *Engine) WaitIdle() { e.wg.Wait() }

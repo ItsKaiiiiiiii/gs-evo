@@ -146,6 +146,13 @@ func (g *Gateway) handleFrame(c *conn, raw []byte) bool {
 		if g.OnTaskEvent != nil {
 			g.OnTaskEvent(c.deviceID, &ev)
 		}
+	case proto.TypeRuntimeSync:
+		var sync proto.RuntimeSyncMsg
+		if err := json.Unmarshal(raw, &sync); err == nil {
+			for _, rt := range sync.Runtimes {
+				_ = g.store.UpsertRuntime(c.deviceID, rt, "probed")
+			}
+		}
 	case proto.TypeKick:
 		// 客户端不会发 kick
 	}
@@ -158,6 +165,12 @@ func (g *Gateway) handleHello(c *conn, raw []byte) {
 	if err := json.Unmarshal(raw, &h); err == nil {
 		agentsJSON, _ := json.Marshal(h.Agents)
 		_ = g.store.UpdateRuntime(c.deviceID, h.Device.Hostname, h.Device.OS, h.Device.Arch, h.Device.WorkerVersion, agentsJSON)
+		g.log.Info("hello runtimes received", "device", c.deviceID, "count", len(h.Runtimes))
+		for _, rt := range h.Runtimes {
+			if err := g.store.UpsertRuntime(c.deviceID, rt, "probed"); err != nil {
+				g.log.Warn("runtime upsert failed", "device", c.deviceID, "runtime", rt.RuntimeID, "err", err)
+			}
+		}
 	}
 
 	welcome := proto.HelloOK{Type: proto.TypeHelloOK, ServerTime: time.Now()}

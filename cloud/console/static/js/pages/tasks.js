@@ -54,8 +54,8 @@
       <div class="form-row">
         <label>设备</label>
         <select id="t-device">${online.map(d => `<option value="${d.id}">${App.esc(d.hostname)}（在线）</option>`).join('') || '<option disabled>无在线设备</option>'}</select>
-        <label>agent</label>
-        <select id="t-agent"><option value="">设备默认</option><option value="gsagent">gsagent（自定义二进制）</option><option value="claude-code">claude-code</option></select>
+        <label>运行时</label>
+        <select id="t-runtime"><option value="">设备默认</option></select>
         <label>超时(秒)</label><input id="t-timeout" type="number" value="600" style="width:80px">
       </div>
       <textarea id="t-prompt" placeholder="任务 prompt…"></textarea>
@@ -215,6 +215,23 @@
       timers.push(() => clearInterval(iv));
     }
 
+    // 运行时下拉随设备联动（D14：任务精确指派到本机 agent 实例）
+    async function loadRuntimes() {
+      const device = document.getElementById('t-device').value;
+      const sel = document.getElementById('t-runtime');
+      sel.innerHTML = '<option value="">设备默认</option>';
+      if (!device) return;
+      try {
+        const rts = await API.get(`${API_}/devices/${device}/runtimes`);
+        (rts || []).filter(r => r.ok).forEach(r => {
+          sel.insertAdjacentHTML('beforeend',
+            `<option value="${App.esc(r.runtime_id)}">${App.esc(r.type)} ${App.esc(r.version || '')}</option>`);
+        });
+      } catch (e) { /* 拉取失败保留默认项 */ }
+    }
+    document.getElementById('t-device').onchange = loadRuntimes;
+    loadRuntimes();
+
     if (App.canWrite()) {
       document.getElementById('t-create').onclick = async () => {
         const device = document.getElementById('t-device').value;
@@ -223,7 +240,7 @@
         try {
           const r = await API.post(`${API_}/tasks`, {
             device_id: device, prompt,
-            agent_type: document.getElementById('t-agent').value,
+            runtime_id: document.getElementById('t-runtime').value,
             timeout_s: parseInt(document.getElementById('t-timeout').value) || 600,
           });
           App.toast('任务已下发：' + r.task_id);

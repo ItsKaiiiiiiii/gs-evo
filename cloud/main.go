@@ -82,6 +82,8 @@ func main() {
 		err = cmdReport()
 	case "token":
 		err = cmdToken(os.Args[2:])
+	case "runtime":
+		err = cmdRuntime(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -534,6 +536,7 @@ func cmdTask(args []string) error {
 	timeout := fs.Int("timeout", 0, "看门狗超时（单位：秒，整数）")
 	maxPerm := fs.String("max-permission", "", "readonly|edits|full")
 	taskID := fs.String("task", "", "task id")
+	runtimeID := fs.String("runtime", "", "runtime id（精确指派本机 agent 实例）")
 	limit := fs.Int("limit", 50, "list limit")
 	fromSeq := fs.Int("from-seq", 0, "replay from seq")
 	if err := fs.Parse(args[1:]); err != nil {
@@ -545,7 +548,7 @@ func cmdTask(args []string) error {
 			return fmt.Errorf("--device and --prompt required")
 		}
 		b, err := adminReq("POST", "/api/v1/admin/tasks", map[string]any{
-			"device_id": *device, "prompt": *prompt, "agent_type": *agent,
+			"device_id": *device, "prompt": *prompt, "agent_type": *agent, "runtime_id": *runtimeID,
 			"timeout_s": *timeout, "max_permission": *maxPerm,
 		})
 		if err != nil {
@@ -988,6 +991,60 @@ func cmdClientUpdate(args []string) error {
 		printJSON(b)
 	default:
 		return fmt.Errorf("usage: gs-cloud client-update push|rollout")
+	}
+	return nil
+}
+
+func cmdRuntime(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: gs-cloud runtime list|register")
+	}
+	sub := args[0]
+	fs := flag.NewFlagSet("runtime", flag.ExitOnError)
+	device := fs.String("device", "", "device id")
+	typ := fs.String("type", "", "runtime type: gsagent|claude-code")
+	path := fs.String("path", "", "runtime binary path")
+	var rtArgs, rtEnv sliceFlags
+	fs.Var(&rtArgs, "arg", "runtime arg (repeatable, comma-separated supported)")
+	fs.Var(&rtEnv, "env", "runtime env K=V (repeatable)")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	switch sub {
+	case "list":
+		if *device == "" {
+			return fmt.Errorf("--device required")
+		}
+		b, err := adminReq("GET", "/api/v1/admin/devices/"+*device+"/runtimes", nil)
+		if err != nil {
+			return err
+		}
+		printJSON(b)
+	case "register":
+		if *device == "" || *typ == "" || *path == "" {
+			return fmt.Errorf("--device --type --path required")
+		}
+		var argList []string
+		for _, a := range rtArgs {
+			argList = append(argList, strings.Split(a, ",")...)
+		}
+		envMap := map[string]string{}
+		for _, kv := range rtEnv {
+			if k, v, ok := strings.Cut(kv, "="); ok {
+				envMap[k] = v
+			}
+		}
+		b, err := adminReq("POST", "/api/v1/admin/commands", map[string]any{
+			"device_id": *device, "cmd_type": "runtime.register",
+			"payload":     map[string]any{"type": *typ, "path": *path, "args": argList, "env": envMap},
+			"ttl_seconds": 120,
+		})
+		if err != nil {
+			return err
+		}
+		printJSON(b)
+	default:
+		return fmt.Errorf("usage: gs-cloud runtime list|register")
 	}
 	return nil
 }

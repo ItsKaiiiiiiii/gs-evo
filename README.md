@@ -67,6 +67,23 @@ http://<云端地址>/console/
 - 页面（实体轴 IA，总览为着陆页）：**总览**（健康+客户端升级入口）· **设备**（实体详情：装机清单/指令历史/任务历史/标签/吊销）· **Skill**（实体详情：版本时间线=diff+rationale+评估历史+自动策略+覆盖率，生成/评估/安装动作内联）· **任务与操作**（一键扫描/获取 skill/探测 agent + 自定义任务）· **进化**（全局队列：BenchmarkSet + EvaluationRun）· **审计**（指令全量历史+操作者+token 管理）
 - 扩展：页面即模块——`cloud/console/static/js/pages/` 下加一个 js 文件并 `App.register(...)` 即成新页面，后端零改动
 
+## 运行时（Runtime）：agent 实例一等实体
+
+参考 multica 的 runtime 概念（采纳"本地发现注册 + 云端指派"，不采纳云端直接创建）。每台设备上的 agent 实例（type+version+path）是一个可寻址的运行时：
+
+```
+gs-cloud runtime list --device ID                                  # 查看设备运行时（hello/周期自动上报）
+gs-cloud runtime register --device ID --type gsagent --path ./my-agent --arg X --env K=V
+                                                                    # 受审计创建：worker 校验二进制并探测版本后登记
+gs-cloud task create --device ID --prompt P --runtime <runtime_id>  # 任务精确指派到某个运行时
+```
+
+- **身份**：`runtime_id = derive(type+path)`，单机内稳定（重装/重启不变）
+- **上报**：hello 携带全量 + 每 5 分钟 `runtime.sync` 周期同步；控制台「设备」详情可见
+- **指派**：`task.start` 带 `runtime_id` 时精确到实例（多 agent 机器必备）；任务记录执行所用运行时
+- **安全**：`runtime.register` 是云端"创建"运行时的唯一入口——worker 校验二进制存在并探测版本后才登记，全程审计（created_by）
+- **表设计坑**：`runtime_id` 仅单机内唯一，表主键必须 `(device_id, id)` 复合，否则相同机器互相覆盖
+
 ## Worker 自更新（无人上机操作）
 
 ```

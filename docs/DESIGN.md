@@ -99,6 +99,7 @@
 | D11 | 任务执行权限三层控制：云端指令创建者鉴权（v1 单管理员）→ `task.start` 携带 `max_permission` 与本地配置取交集 → 本地 `require_confirm` 开关 | `task.start` 实质是间接任意代码执行，真正的信任边界是"谁能创建指令"与"agent 以什么权限模式运行" |
 | D12 | Agent 运行凭证用**本机已有配置**，云端不下发 env/secret | 云端推送密钥既扩攻击面又制造密钥管理负担 |
 | D13 | v1 **任务不跨 Client 进程重启存活**；机器级多用户按 **1 OS 用户 = 1 device** | 显式声明边界，避免隐藏 bug；skill 在用户 home 下，按用户建模最简 |
+| D14 | **运行时（Runtime）一等实体**：本机 agent 实例（type+version+path）由 worker 本地发现并注册上报；任务可按 runtime_id 精确指派；"云端创建运行时"收敛为受审计的 `runtime.register` 指令（worker 侧校验后登记）。参考 multica runtime 概念，采纳其"本地发现注册 + 云端指派"，**不采纳**云端直接创建（方向相反，会重开远程写机器的门） | 多 agent 机器需要精确指派；评估结果需绑定执行环境；agent 上下线需可视 |
 
 ## 4. 语言与技术栈
 
@@ -248,6 +249,7 @@ gs-evo/
 | `task.start` | `{task_id, prompt, workdir_policy, timeout_s, max_permission, env?}` | spawn agent 执行任务，流式回传；`max_permission` 与本地配置取**更严者** |
 | `task.cancel` | `{task_id}` | 终止进程树（POSIX 进程组 / Windows Job Object），回收工作目录 |
 | `task.events_replay` | `{task_id, from_seq}` | 从本地事件缓冲/落盘文件重发任务事件（v2 新增） |
+| `runtime.register` | `{type, path, args?, env?}` | 登记本机运行时（受审计创建：worker 校验二进制存在并探测版本后才持久化） |
 | `client.update` | `{version, url, sha256, signature}` |（预留）Client 自更新 |
 
 客户端 → 云端其余消息：
@@ -267,6 +269,7 @@ gs-evo/
   "proto_version": 1,
   "device": { "hostname": "…", "os": "darwin", "arch": "arm64", "worker_version": "0.3.0" },
   "agents": [ { "type": "claude-code", "version": "2.x", "path": "…", "ok": true } ],
+  "runtimes": [ { "runtime_id": "rt-…", "type": "gsagent", "version": "1", "path": "…", "ok": true } ],
   "skills": [ { "name": "gerrit-review", "version": "3", "content_hash": "sha256:1f0c…", "local_state": "clean" } ],
   "last_acked_cmd_seq": 136
 }
@@ -360,6 +363,15 @@ gs-evo/
 | `mat_` task token 注入 agent 进程 | 不需要 | gs-evo 的 agent 进程不与云端通信（D12），不存在"owner 凭证泄露给 agent 进程"的面 |
 | 浏览器 OAuth login（本地回调端口 + state 防 CSRF） | P4 随 console 用户体系引入 | v1 headless enroll 流已覆盖 |
 | Redis 缓存 | 进程内 LRU | v1 规模不需要 |
+
+### 6.8 运行时（Runtime，D14）
+
+**概念**：runtime = 本机一个可被寻址的 agent 实例（type + version + path），参考 multica 的 runtime 概念。与 multica 一致采纳**本地发现注册**（worker 探测 → hello/`runtime.sync` 上报 → 云端 runtime 表），**不采纳**"云端直接创建"（方向相反，等于远程写用户机器）。
+
+- **身份**：`runtime_id = derive(type + path)`——重装/重启稳定；同类型多实例（不同路径）各自成体；
+- **同步**：hello 携带全量 + 每 5 分钟 `runtime.sync` 周期上报，云端 runtime 表 upsert；
+- **指派**：`task.start` 可带 `runtime_id`（优先于 `agent_type`），任务记录执行所用 runtime——评估结果绑定执行环境；
+- **创建**：`runtime.register` 指令（审计页可见 created_by）——worker 校验二进制存在并探测版本后才持久化到 state.json（source=registered，含 args/env）。
 
 ## 7. 关键流程
 
@@ -462,8 +474,10 @@ EvaluationRun {id, skill_ver_id, benchmark_set_id, device_ids[], started_at,
 DeviceSkillInstall {id, device_id, skill_ver_id, installed_at,
                     result: ok|conflict_skipped|failed, prev_ver_id}
 
-Task        {id, device_id, prompt, max_permission, status, created_at,
-             created_by, events_ref, result_ref}
+Runtime     {id, device_id, type, version, path, ok, source: probed|registered,
+             last_seen}                                       ← 本机 agent 实例（D14）
+Task        {id, device_id, prompt, agent_type, runtime_id, max_permission,
+             status, created_at, created_by, events_ref, result_ref}
 Command     {id, cmd_seq, device_id, cmd_type, payload, created_by,
              status: pending|sent|acked|expired, issued_at, acked_at, result_at}
 ```

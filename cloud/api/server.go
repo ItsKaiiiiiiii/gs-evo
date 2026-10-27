@@ -170,6 +170,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/admin/devices/{id}/disconnect", s.authAdmin(s.handleDisconnectDevice))
 	mux.HandleFunc("POST /api/v1/admin/devices/{id}/labels", s.authAdmin(s.handleSetDeviceLabels))
 	mux.HandleFunc("GET /api/v1/admin/devices/{id}/installs", s.authAny(s.handleDeviceInstalls))
+	mux.HandleFunc("GET /api/v1/admin/devices/{id}/runtimes", s.authAny(s.handleDeviceRuntimes))
 	mux.HandleFunc("GET /api/v1/admin/skills/{name}/coverage", s.authAny(s.handleSkillCoverage))
 	mux.HandleFunc("GET /api/v1/admin/evaluations", s.authAny(s.handleRecentEvaluations))
 	mux.HandleFunc("GET /api/v1/admin/tokens", s.authAny(s.handleListTokens))
@@ -528,6 +529,23 @@ func (s *Server) onTaskResult(deviceID string, res *proto.CmdResult) {
 			return
 		}
 	}
+	if tr.TaskID == "" {
+		// 启动失败的 result 不带 task_id：从指令 payload 反查
+		cmd, err := s.st.GetCommand(res.CmdID)
+		if err != nil || cmd == nil {
+			return
+		}
+		tr.TaskID, _ = cmd.Payload["task_id"].(string)
+		if rt, _ := cmd.Payload["runtime_id"].(string); rt != "" {
+			tr.RuntimeID = rt
+		}
+	}
+	if tr.TaskID == "" {
+		return
+	}
+	if tr.RuntimeID != "" {
+		_ = s.st.SetTaskRuntime(tr.TaskID, tr.RuntimeID)
+	}
 	if !res.OK && tr.Status == "" {
 		// 任务没能启动（spawn 失败等）：归 failed，错误浮出到任务结果
 		_ = s.st.SetTaskResult(tr.TaskID, proto.TaskFailed,
@@ -586,6 +604,16 @@ func (s *Server) handleDeviceInstalls(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, installs)
+}
+
+// handleDeviceRuntimes 设备详情：运行时列表（D14）。
+func (s *Server) handleDeviceRuntimes(w http.ResponseWriter, r *http.Request) {
+	rts, err := s.st.ListRuntimesByDevice(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, rts)
 }
 
 // handleSkillCoverage skill 覆盖（评审问题 6）。
@@ -728,11 +756,12 @@ func (s *Server) handleCreateCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch req.CmdType {
-	case proto.CmdAgentProbe, proto.CmdSkillsScan, proto.CmdSkillsCollect, proto.CmdTaskEventsReplay:
+	case proto.CmdAgentProbe, proto.CmdSkillsScan, proto.CmdSkillsCollect, proto.CmdTaskEventsReplay, proto.CmdRuntimeRegister:
 	default:
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf(
-			"cmd_type %q not allowed here; allowed: %s, %s, %s, %s（skill 安装请用 skill install，任务请用 task create）",
-			req.CmdType, proto.CmdAgentProbe, proto.CmdSkillsScan, proto.CmdSkillsCollect, proto.CmdTaskEventsReplay))
+			"cmd_type %q not allowed here; allowed: %s, %s, %s, %s, %s（skill 安装请用 skill install，任务请用 task create）",
+			req.CmdType, proto.CmdAgentProbe, proto.CmdSkillsScan, proto.CmdSkillsCollect,
+			proto.CmdTaskEventsReplay, proto.CmdRuntimeRegister))
 		return
 	}
 	if d, _ := s.st.GetDevice(req.DeviceID); d == nil {

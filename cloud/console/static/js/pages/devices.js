@@ -59,9 +59,10 @@
       view.innerHTML = '<div class="card"><button class="small" id="dev-back">← 返回列表</button> 加载中…</div>';
       document.getElementById('dev-back').onclick = () => render(view.parentElement || view);
 
-      const [devs, installs, cmds, tasks] = await Promise.all([
+      const [devs, installs, runtimes, cmds, tasks] = await Promise.all([
         API.get(`${API_}/devices`),
         API.get(`${API_}/devices/${id}/installs`).catch(() => []),
+        API.get(`${API_}/devices/${id}/runtimes`).catch(() => []),
         API.get(`${API_}/commands?device_id=${id}&limit=50`),
         API.get(`${API_}/tasks?device_id=${id}&limit=50`),
       ]);
@@ -102,6 +103,14 @@
           <button class="small" id="dev-labels-save">保存标签</button>` : ''}
         </div>
       </div>
+      <div class="card"><h3>运行时（本机 agent 实例）</h3>
+        <table><tr><th>运行时 ID</th><th>类型</th><th>版本</th><th>状态</th><th>来源</th><th>路径</th></tr>
+        ${(runtimes || []).map(r => `<tr>
+          <td title="${App.esc(r.runtime_id)}">${App.esc(r.runtime_id.slice(0, 15))}…</td>
+          <td><b>${App.esc(r.type)}</b></td><td>${App.esc(r.version || '-')}</td>
+          <td>${r.ok ? '<span class="badge green">可用</span>' : '<span class="badge red">不可用</span>'}</td>
+          <td>${App.esc(r.source)}</td><td title="${App.esc(r.path || '')}">${App.esc((r.path || '-').slice(0, 40))}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">未上报运行时</td></tr>'}
+        </table></div>
       <div class="card"><h3>已装 skill（装机记录）</h3>
         <table><tr><th>Skill</th><th>版本</th><th>结果</th><th>时间</th></tr>${instRows}</table></div>
       <div class="card"><h3>指令历史（最近 50）</h3>

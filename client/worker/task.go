@@ -160,25 +160,50 @@ func (e *Engine) handleTaskStart(ctx context.Context, payload map[string]any) (m
 	runCtx, watchdog := context.WithTimeout(context.Background(), timeout)
 	defer watchdog()
 
+	// 运行时指派：runtime_id 精确匹配（D14）优先，其次 agent_type，最后默认探测
 	agentType := p.AgentType
-	if agentType == "" {
+	binPath := ""
+	var runtimeArgs []string
+	runtimeEnv := map[string]string{}
+	if p.RuntimeID != "" {
+		rt, err := e.resolveRuntime(ctx, p.RuntimeID)
+		if err != nil {
+			e.finishTask(t)
+			return nil, err
+		}
+		agentType = rt.Type
+		binPath = rt.Path
+		runtimeArgs = rt.Args
+		for k, v := range rt.Env {
+			runtimeEnv[k] = v
+		}
+	} else if agentType == "" {
 		agentType = e.defaultAgentType()
 	}
-	binPath := ""
-	if agentType == "gsagent" || agentType == "mock" {
-		binPath = e.Cfg.AgentPath
+	if binPath == "" {
+		if agentType == "gsagent" || agentType == "mock" {
+			binPath = e.Cfg.AgentPath
+		} else if e.Cfg.AgentPath != "" {
+			binPath = e.Cfg.AgentPath
+		}
 	}
 
-	cmd, err := e.startAgent(agentType, &startOpts{binPath: binPath, prompt: p.Prompt, permission: perm})
+	cmd, err := e.startAgent(agentType, &startOpts{binPath: binPath, args: runtimeArgs, prompt: p.Prompt, permission: perm})
 	if err != nil {
 		e.finishTask(t)
 		return nil, err
 	}
 	cmd.Dir = workdir
-	cmd.Env = envFor(p.Env, e.Cfg.AgentEnv) // 任务 env 覆盖 + 本地 agent_env（P2-9）
+	mergedEnv := map[string]string{}
+	for k, v := range runtimeEnv {
+		mergedEnv[k] = v
+	}
+	for k, v := range p.Env {
+		mergedEnv[k] = v
+	}
+	cmd.Env = envFor(mergedEnv, e.Cfg.AgentEnv) // runtime env → 任务 env 覆盖 + 本地 agent_env
 	if agentType == "gsagent" || agentType == "mock" {
 		cmd.Args = append(cmd.Args, e.Cfg.AgentArgs...)
-		cmd.Path = e.Cfg.AgentPath // gsagent 的参数由 exec.Command 组装后需重设 Path
 	}
 	prepareProc(cmd) // POSIX 进程组 / Windows 挂起创建（§6）
 
@@ -308,7 +333,7 @@ func (e *Engine) handleTaskStart(ctx context.Context, payload map[string]any) (m
 	duration := time.Since(t.started)
 
 	tr := proto.TaskResult{
-		TaskID: p.TaskID, Status: finalStatus, Exit: exitCode,
+		TaskID: p.TaskID, RuntimeID: p.RuntimeID, Status: finalStatus, Exit: exitCode,
 		DurationMs: duration.Milliseconds(), Summary: summary,
 	}
 	data, _ := structToMap(tr)

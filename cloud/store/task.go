@@ -15,6 +15,7 @@ type TaskRow struct {
 	DeviceID      string         `json:"device_id"`
 	Prompt        string         `json:"prompt"`
 	AgentType     string         `json:"agent_type,omitempty"`
+	RuntimeID     string         `json:"runtime_id,omitempty"`
 	MaxPermission string         `json:"max_permission,omitempty"`
 	Status        string         `json:"status"`
 	CreatedBy     string         `json:"created_by"`
@@ -24,13 +25,13 @@ type TaskRow struct {
 	FinishedAt    *time.Time     `json:"finished_at,omitempty"`
 }
 
-const taskCols = `id, device_id, prompt, agent_type, max_permission, status, created_by, cmd_id, result, created_at, finished_at`
+const taskCols = `id, device_id, prompt, agent_type, runtime_id, max_permission, status, created_by, cmd_id, result, created_at, finished_at`
 
 func scanTask(row interface{ Scan(...any) error }) (*TaskRow, error) {
 	var t TaskRow
 	var resultRaw []byte
 	var finished sql.NullTime
-	if err := row.Scan(&t.ID, &t.DeviceID, &t.Prompt, &t.AgentType, &t.MaxPermission, &t.Status,
+	if err := row.Scan(&t.ID, &t.DeviceID, &t.Prompt, &t.AgentType, &t.RuntimeID, &t.MaxPermission, &t.Status,
 		&t.CreatedBy, &t.CmdID, &resultRaw, &t.CreatedAt, &finished); err != nil {
 		return nil, err
 	}
@@ -44,8 +45,8 @@ func scanTask(row interface{ Scan(...any) error }) (*TaskRow, error) {
 }
 
 func (s *Store) CreateTask(t *TaskRow) error {
-	_, err := s.DB.Exec(`INSERT INTO task (id, device_id, prompt, agent_type, max_permission, created_by, cmd_id)
-		VALUES (?,?,?,?,?,?,?)`, t.ID, t.DeviceID, t.Prompt, t.AgentType, t.MaxPermission, t.CreatedBy, t.CmdID)
+	_, err := s.DB.Exec(`INSERT INTO task (id, device_id, prompt, agent_type, runtime_id, max_permission, created_by, cmd_id)
+		VALUES (?,?,?,?,?,?,?,?)`, t.ID, t.DeviceID, t.Prompt, t.AgentType, t.RuntimeID, t.MaxPermission, t.CreatedBy, t.CmdID)
 	return err
 }
 

@@ -107,6 +107,7 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 		Install        bool     `json:"install"`
 		TargetRoot     string   `json:"target_root,omitempty"` // install=true 时必填（灰度安装目标根目录）
 		AgentType      string   `json:"agent_type,omitempty"`  // 评估用例执行 agent（空=设备默认）
+		RuntimeID      string   `json:"runtime_id,omitempty"`  // 精确指派运行时（优先于 agent_type）
 	}](r)
 	if err != nil || req.Version == "" || req.BenchmarkSetID == "" || len(req.DeviceIDs) == 0 {
 		writeErr(w, http.StatusBadRequest, "version, benchmark_set_id, device_ids required")
@@ -117,7 +118,7 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run, err := s.evo.Evaluate(r.Context(), r.PathValue("name"), req.Version,
-		req.BenchmarkSetID, "admin", req.DeviceIDs, req.Install, req.TargetRoot, req.AgentType)
+		req.BenchmarkSetID, "admin", req.DeviceIDs, req.Install, req.TargetRoot, req.AgentType, req.RuntimeID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -410,7 +411,7 @@ func (s *Server) setupEvolution() {
 		return s.svc.CreateInstallCommands(ctx, skillName, version, targetRoot, onConflict,
 			createdBy, deviceIDs, labels, evaluationRunID)
 	}
-	eng.TaskIssuer = func(ctx context.Context, deviceID, prompt, agentType string, timeoutS int, env map[string]string) (*store.Command, error) {
+	eng.TaskIssuer = func(ctx context.Context, deviceID, prompt, agentType, runtimeID string, timeoutS int, env map[string]string) (*store.Command, error) {
 		if env == nil {
 			env = map[string]string{}
 		}
@@ -423,7 +424,8 @@ func (s *Server) setupEvolution() {
 			return nil, err
 		}
 		payload, _ := json.Marshal(proto.TaskStartPayload{
-			TaskID: taskID, Prompt: prompt, AgentType: agentType, TimeoutS: timeoutS, Env: env,
+			TaskID: taskID, Prompt: prompt, AgentType: agentType, RuntimeID: runtimeID,
+			TimeoutS: timeoutS, Env: env,
 		})
 		var pm map[string]any
 		_ = json.Unmarshal(payload, &pm)

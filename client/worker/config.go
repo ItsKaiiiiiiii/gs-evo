@@ -52,6 +52,7 @@ type State struct {
 	Installed map[string]InstalledRec `json:"installed"`
 	Results   map[string]ResultRec    `json:"results"` // cmd_id → 结果（上限 128）
 	MaxSeq    int64                   `json:"max_seq"`
+	Runtimes  map[string]RuntimeEntry `json:"runtimes,omitempty"` // 已登记运行时（runtime.register，持久）
 }
 
 const maxCachedResults = 128
