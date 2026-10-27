@@ -40,9 +40,12 @@ type Engine struct {
 	// ExecHook 测试钩子：指令真正执行完成后回调（幂等回放不触发）。
 	ExecHook func(cmdID, cmdType string)
 
-	handlers map[string]HandlerFunc
-	sem      chan struct{} // 并发上限
-	mu       sync.Mutex    // 保护 State 落盘
+	handlers    map[string]HandlerFunc
+	sem         chan struct{} // 并发上限
+	mu          sync.Mutex    // 保护 State / tasks / currentConn
+	tasks       map[string]*activeTask
+	currentConn *websocket.Conn
+	inflight    map[string]chan struct{} // 执行中的 cmd_id（防同毫秒重复投递双跑）
 }
 
 // HandlerFunc 指令处理器：payload → data / error。
@@ -60,12 +63,17 @@ func NewEngine(h Home, log *slog.Logger) (*Engine, error) {
 		Home: h, Cfg: cfg, Log: log,
 		State:    h.LoadState(),
 		handlers: map[string]HandlerFunc{},
+		tasks:    map[string]*activeTask{},
+		inflight: map[string]chan struct{}{},
 		sem:      make(chan struct{}, cfg.MaxConcurrency),
 	}
 	e.register(proto.CmdAgentProbe, e.handleProbe)
 	e.register(proto.CmdSkillsScan, e.Scan)
 	e.register(proto.CmdSkillsCollect, e.handleCollect)
 	e.register(proto.CmdSkillsInstall, e.handleInstall)
+	e.register(proto.CmdTaskStart, e.handleTaskStart)
+	e.register(proto.CmdTaskCancel, e.handleTaskCancel)
+	e.register(proto.CmdTaskEventsReplay, e.handleEventsReplay)
 	return e, nil
 }
 
@@ -86,7 +94,9 @@ func (e *Engine) Run(ctx context.Context) error {
 		if err != nil {
 			e.Log.Warn("connection ended", "err", err)
 		}
-		_ = connected
+		if connected {
+			backoff = time.Second // 连接过就重置退避（§6.1：成功建连即恢复）
+		}
 		// 指数退避 + 抖动（1s→30s，§6.1）
 		jitter := time.Duration(rand.Int63n(int64(backoff)/4 + 1))
 		sleep := backoff + jitter
@@ -118,6 +128,16 @@ func (e *Engine) serveOnce(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	defer ws.Close()
+	e.mu.Lock()
+	e.currentConn = ws
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		if e.currentConn == ws {
+			e.currentConn = nil
+		}
+		e.mu.Unlock()
+	}()
 	// ctx 取消（进程退出）时主动断连，解除 ReadMessage 阻塞
 	stopOnCtx := make(chan struct{})
 	defer close(stopOnCtx)
@@ -188,6 +208,7 @@ func (e *Engine) serveOnce(ctx context.Context) (bool, error) {
 		case proto.TypeCmd:
 			var cmd proto.Cmd
 			if json.Unmarshal(raw, &cmd) == nil {
+				e.Log.Debug("cmd frame received", "cmd_id", cmd.CmdID, "seq", cmd.CmdSeq, "type", cmd.CmdType)
 				e.dispatch(ws, &cmd)
 			}
 		case proto.TypeKick:
@@ -213,7 +234,21 @@ func (e *Engine) dispatch(ws *websocket.Conn, cmd *proto.Cmd) {
 		e.sendResult(ws, res) // 重新走 spool（可能此前未送达）
 		return
 	}
+	if done, busy := e.inflight[cmd.CmdID]; busy {
+		e.mu.Unlock()
+		<-done // 等首跑出结果并回放缓存（下方重查），保证恰好一次执行
+		e.dispatch(ws, cmd)
+		return
+	}
+	done := make(chan struct{})
+	e.inflight[cmd.CmdID] = done
 	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		delete(e.inflight, cmd.CmdID)
+		e.mu.Unlock()
+		close(done)
+	}()
 
 	// 2. 过期指令直接拒绝执行（§6.2）
 	if cmd.ExpiresAt != nil && time.Now().After(*cmd.ExpiresAt) {
@@ -248,7 +283,11 @@ func (e *Engine) dispatch(ws *websocket.Conn, cmd *proto.Cmd) {
 			}
 		}()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		timeout := 30 * time.Minute
+		if cmd.CmdType == proto.CmdTaskStart {
+			timeout = hardTaskDeadline // 任务自身有看门狗，这里是兜底硬顶
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		data, err := handler(ctx, cmd.Payload)
 		if err != nil {

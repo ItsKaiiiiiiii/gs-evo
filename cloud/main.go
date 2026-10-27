@@ -43,6 +43,8 @@ func main() {
 		err = cmdCmd(os.Args[2:])
 	case "skill":
 		err = cmdSkill(os.Args[2:])
+	case "task":
+		err = cmdTask(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -65,6 +67,10 @@ func usage() {
   skill list | skill versions --name N
   skill set-status --name N --version V --status S
   skill install --name N --version V --target-root R [--device ID]... [--label L] [--on-conflict skip|overwrite]
+  task create --device ID --prompt P [--agent T] [--timeout S] [--max-permission M]
+  task list --device ID [--limit N]
+  task events --task ID [--from-seq N]
+  task cancel --task ID
 
 env: GSEVO_DSN GSEVO_ADDR GSEVO_DATA_DIR GSEVO_ADMIN_TOKEN GSEVO_PUBLIC_URL
 cli: GSEVO_URL (default http://127.0.0.1:8080) GSEVO_ADMIN_TOKEN
@@ -337,6 +343,69 @@ func cmdSkill(args []string) error {
 		printJSON(b)
 	default:
 		return fmt.Errorf("usage: gs-cloud skill list|versions|set-status|install")
+	}
+	return nil
+}
+
+func cmdTask(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: gs-cloud task create|list|events|cancel")
+	}
+	sub := args[0]
+	fs := flag.NewFlagSet("task", flag.ExitOnError)
+	device := fs.String("device", "", "device id")
+	prompt := fs.String("prompt", "", "task prompt")
+	agent := fs.String("agent", "", "agent type")
+	timeout := fs.Int("timeout", 0, "watchdog seconds")
+	maxPerm := fs.String("max-permission", "", "readonly|edits|full")
+	taskID := fs.String("task", "", "task id")
+	limit := fs.Int("limit", 50, "list limit")
+	fromSeq := fs.Int("from-seq", 0, "replay from seq")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	switch sub {
+	case "create":
+		if *device == "" || *prompt == "" {
+			return fmt.Errorf("--device and --prompt required")
+		}
+		b, err := adminReq("POST", "/api/v1/admin/tasks", map[string]any{
+			"device_id": *device, "prompt": *prompt, "agent_type": *agent,
+			"timeout_s": *timeout, "max_permission": *maxPerm,
+		})
+		if err != nil {
+			return err
+		}
+		printJSON(b)
+	case "list":
+		if *device == "" {
+			return fmt.Errorf("--device required")
+		}
+		b, err := adminReq("GET", fmt.Sprintf("/api/v1/admin/tasks?device_id=%s&limit=%d", *device, *limit), nil)
+		if err != nil {
+			return err
+		}
+		printJSON(b)
+	case "events":
+		if *taskID == "" {
+			return fmt.Errorf("--task required")
+		}
+		b, err := adminReq("GET", fmt.Sprintf("/api/v1/admin/tasks/%s/events?from_seq=%d&limit=%d", *taskID, *fromSeq, *limit), nil)
+		if err != nil {
+			return err
+		}
+		printJSON(b)
+	case "cancel":
+		if *taskID == "" {
+			return fmt.Errorf("--task required")
+		}
+		b, err := adminReq("POST", "/api/v1/admin/tasks/"+*taskID+"/cancel", map[string]any{})
+		if err != nil {
+			return err
+		}
+		printJSON(b)
+	default:
+		return fmt.Errorf("usage: gs-cloud task create|list|events|cancel")
 	}
 	return nil
 }

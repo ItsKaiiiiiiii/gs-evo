@@ -47,6 +47,7 @@ func TestMain(m *testing.M) {
 		_, _ = db.Exec("CREATE DATABASE gsevo_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
 		_ = db.Close()
 	}
+	buildMockAgent()
 	code := runWithCloud(m)
 	os.Exit(code)
 }

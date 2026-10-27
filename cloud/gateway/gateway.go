@@ -20,8 +20,11 @@ const (
 	pingInterval  = 30 * time.Second
 )
 
-// ResultHandler cmd_result 汇聚回调（api 层接到 skillsvc）。
+// ResultHandler cmd_result 汇聚回调（api 层接到 skillsvc/tasksvc）。
 type ResultHandler func(deviceID string, res *proto.CmdResult)
+
+// TaskEventHandler task.event 汇聚回调（api 层落库）。
+type TaskEventHandler func(deviceID string, ev *proto.TaskEvent)
 
 // PendingLoader 重连补发加载器（api 层接 store）。
 type PendingLoader func(deviceID string) ([]*store.Command, error)
@@ -36,12 +39,28 @@ type conn struct {
 }
 
 type Gateway struct {
-	store    *store.Store
-	log      *slog.Logger
-	mu       sync.RWMutex
-	conns    map[string]*conn
-	OnResult ResultHandler
-	LoadPend PendingLoader
+	store       *store.Store
+	log         *slog.Logger
+	mu          sync.RWMutex
+	conns       map[string]*conn
+	rejectUntil time.Time // 维护模式：拒绝新连接（不掐已建立的）
+	OnResult    ResultHandler
+	OnTaskEvent TaskEventHandler
+	LoadPend    PendingLoader
+}
+
+// RejectNewConns 维护模式：duration 内拒绝新 WS 连接（已建立的不断）。
+func (g *Gateway) RejectNewConns(duration time.Duration) {
+	g.mu.Lock()
+	g.rejectUntil = time.Now().Add(duration)
+	g.mu.Unlock()
+}
+
+// Rejecting 是否处于维护模式。
+func (g *Gateway) Rejecting() bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return time.Now().Before(g.rejectUntil)
 }
 
 func New(st *store.Store, log *slog.Logger) *Gateway {
@@ -53,13 +72,13 @@ func (g *Gateway) ServeConn(deviceID string, ws *websocket.Conn) {
 	c := &conn{ws: ws, send: make(chan []byte, sendBuffer), deviceID: deviceID, closeCh: make(chan struct{})}
 
 	g.mu.Lock()
-	if old, ok := g.conns[deviceID]; ok { // 同设备旧连接（如重连竞态）：踢旧保新
+	if old, ok := g.conns[deviceID]; ok && old != c { // 同设备旧连接（重连竞态）：踢旧保新
 		g.mu.Unlock()
 		g.closeConn(old, "replaced by new connection")
-	} else {
-		g.conns[deviceID] = c
-		g.mu.Unlock()
+		g.mu.Lock()
 	}
+	g.conns[deviceID] = c
+	g.mu.Unlock()
 	_ = g.store.SetOnline(deviceID)
 	defer func() {
 		g.mu.Lock()
@@ -118,6 +137,14 @@ func (g *Gateway) handleFrame(c *conn, raw []byte) bool {
 		}
 		if g.OnResult != nil && cmd != nil {
 			g.OnResult(cmd.DeviceID, &res)
+		}
+	case proto.TypeTaskEvent:
+		var ev proto.TaskEvent
+		if err := json.Unmarshal(raw, &ev); err != nil || ev.TaskID == "" {
+			return true
+		}
+		if g.OnTaskEvent != nil {
+			g.OnTaskEvent(c.deviceID, &ev)
 		}
 	case proto.TypeKick:
 		// 客户端不会发 kick

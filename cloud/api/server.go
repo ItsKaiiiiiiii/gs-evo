@@ -101,6 +101,7 @@ func NewServer(cfg Config, st *store.Store, log *slog.Logger) (*Server, error) {
 
 	s.gw = gateway.New(st, log)
 	s.gw.OnResult = s.onCmdResult
+	s.gw.OnTaskEvent = s.onTaskEvent
 	s.gw.LoadPend = s.loadPending
 	return s, nil
 }
@@ -132,6 +133,14 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/admin/skills/{name}/versions/{version}/status", s.authAdmin(s.handleSetStatus))
 	mux.HandleFunc("POST /api/v1/admin/skills/{name}/install", s.authAdmin(s.handleInstall))
 	mux.HandleFunc("GET /api/v1/admin/key", s.authAdmin(s.handleKey))
+
+	// 任务面（P2）
+	mux.HandleFunc("POST /api/v1/admin/tasks", s.authAdmin(s.handleCreateTask))
+	mux.HandleFunc("GET /api/v1/admin/tasks", s.authAdmin(s.handleListTasks))
+	mux.HandleFunc("GET /api/v1/admin/tasks/{id}/events", s.authAdmin(s.handleTaskEvents))
+	mux.HandleFunc("POST /api/v1/admin/tasks/{id}/cancel", s.authAdmin(s.handleTaskCancel))
+	mux.HandleFunc("POST /api/v1/admin/devices/{id}/disconnect", s.authAdmin(s.handleDisconnectDevice))
+	mux.HandleFunc("POST /api/v1/admin/maintenance", s.authAdmin(s.handleMaintenance))
 	return mux
 }
 
@@ -264,6 +273,10 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 
 // handleAgentWS WS 升级：Bearer 头在 upgrade 前完成鉴权（§6.7，未鉴权连接不存在）。
 func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
+	if s.gw.Rejecting() {
+		writeErr(w, http.StatusServiceUnavailable, "server maintenance, retry later")
+		return
+	}
 	d := s.verifier.VerifyDevice(r.Context(), r.Header.Get("Authorization"))
 	if d == nil {
 		// 401 而非 404：本端点不承载可枚举资源（设备枚举防护在多租户 P4 引入）
@@ -428,6 +441,47 @@ func (s *Server) onCmdResult(deviceID string, res *proto.CmdResult) {
 		}
 	case proto.CmdSkillsInstall:
 		s.svc.OnInstallResult(deviceID, res)
+	case proto.CmdTaskStart:
+		s.onTaskResult(deviceID, res)
+	}
+}
+
+// onTaskResult task.start 终态 → task 表归态（§7.4）。
+func (s *Server) onTaskResult(deviceID string, res *proto.CmdResult) {
+	if res.Data == nil {
+		return
+	}
+	raw, _ := json.Marshal(res.Data)
+	var tr proto.TaskResult
+	if json.Unmarshal(raw, &tr) != nil || tr.TaskID == "" {
+		return
+	}
+	if !res.OK && tr.Status == "" {
+		// 任务没能启动（spawn 失败等）：归 failed
+		_ = s.st.SetTaskResult(tr.TaskID, proto.TaskFailed,
+			map[string]any{"error": res.Error})
+		return
+	}
+	// cmd_result 是终态权威（status 事件先到时已写过 status，但 result 以此为准）
+	_ = s.st.SetTaskResult(tr.TaskID, tr.Status, res.Data)
+}
+
+// onTaskEvent 事件落库（UNIQUE(task_id,seq) 幂等）+ status 迁移。
+func (s *Server) onTaskEvent(deviceID string, ev *proto.TaskEvent) {
+	task, err := s.st.GetTask(ev.TaskID)
+	if err != nil || task == nil {
+		return // 未知任务（或已清理）：丢弃
+	}
+	if task.DeviceID != deviceID {
+		return // 归属校验：不接受其他设备的帧（§6.7 连接级 context）
+	}
+	if err := s.st.InsertTaskEvent(ev); err != nil {
+		s.log.Warn("task event insert failed", "task", ev.TaskID, "seq", ev.Seq, "err", err)
+	}
+	if ev.Kind == proto.EventKindStatus {
+		if st, _ := ev.Data["status"].(string); st != "" {
+			_ = s.st.UpdateTaskStatus(ev.TaskID, st, nil)
+		}
 	}
 }
 
@@ -503,7 +557,7 @@ func (s *Server) handleCreateCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch req.CmdType {
-	case proto.CmdAgentProbe, proto.CmdSkillsScan, proto.CmdSkillsCollect:
+	case proto.CmdAgentProbe, proto.CmdSkillsScan, proto.CmdSkillsCollect, proto.CmdTaskEventsReplay:
 	default:
 		writeErr(w, http.StatusBadRequest, "cmd_type not allowed via raw endpoint: "+req.CmdType)
 		return

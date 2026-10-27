@@ -81,7 +81,7 @@ GSEVO_ADDR=:8080 GSEVO_DATA_DIR=./data ./gs-cloud serve   # 首次启动打印 a
 
 ## 状态
 
-🚧 **P0 + P1 已实现并通过自测**（e2e 覆盖全部验收标准）：
+🚧 **P0 + P1 + P2 已实现并通过自测**（e2e 覆盖全部验收标准）：
 
 | 验收项 | 状态 |
 |--------|------|
@@ -91,7 +91,11 @@ GSEVO_ADDR=:8080 GSEVO_DATA_DIR=./data ./gs-cloud serve   # 首次启动打印 a
 | P1 采集→人工转 stable 签名→装到另一机 | ✅ `TestP1_CollectSignInstall` |
 | P1 本地改动冲突跳过（skip_and_report） | ✅ 同上（含 overwrite 显式覆盖路径） |
 | P1 `.prev` 本地秒回滚 | ✅ 同上 |
+| P2 云端下发 prompt 实时回传 | ✅ `TestP2_TaskFlow` |
+| P2 断网重连结果不丢（spool）+ 事件补齐（replay） | ✅ `TestP2_OfflineSpoolReplay` |
+| P2 `task.cancel` 杀干净进程树 | ✅ `TestP2_Cancel` |
+| P2 看门狗超时 | ✅ `TestP2_Timeout` |
 
-P2（任务通道：AgentAdapter + stdio 协议）未开始；动工前置 `docs/AGENT-PROTOCOL.md`。
+P2 关键件：`docs/AGENT-PROTOCOL.md`（内部协议 spec，先行评审）→ AgentAdapter（gsagent 内部协议 / claude-code stream-json 映射）→ Task Runner（隔离工作目录、看门狗、事件内存环 2000 条 + events.jsonl 全量落盘、单帧 64KB 截断）→ 进程树终止（POSIX 进程组 / Windows Job Object）。`task.cancel` 为管理员操作（D11：`max_permission` 与本地 `permission_mode` 取更严者，`require_confirm` 生效时拒绝执行）。
 
 已知实现偏差（与设计文档）：sqlc 代码生成暂以手写 store 层替代（接口形态一致，便于后续替换）；TLS 终止依赖外部反代（dev 环境为 http/ws）。

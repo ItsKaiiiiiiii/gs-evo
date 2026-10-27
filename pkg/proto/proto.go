@@ -47,9 +47,10 @@ const (
 	CmdClientUpdate     = "client.update"      // P4 预留
 )
 
-// SupportedCommands P0/P1 客户端声明的能力集。
+// SupportedCommands 客户端声明的能力集。
 var SupportedCommands = []string{
 	CmdAgentProbe, CmdSkillsScan, CmdSkillsCollect, CmdSkillsInstall,
+	CmdTaskStart, CmdTaskCancel, CmdTaskEventsReplay,
 }
 
 // ---- 基础档案 ----
