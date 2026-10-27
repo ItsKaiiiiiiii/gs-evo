@@ -19,6 +19,7 @@
 | C10 | 传输阈值调整：内嵌 base64 上限 256KB，其余一律走预签名 URL | WS 帧过中间代理常限 1MB；4MB base64 膨胀 33% 易翻车 |
 | C11 | 设备模型明确为 **1 OS 用户 = 1 device**；任务默认不跨 Client 重启存活（v1 明示） | skill 在用户 home 下；隐藏行为必须写成显式约定 |
 | C12 | 数据模型新增 `EvaluationRun` / `BenchmarkSet` / `DeviceSkillInstall`，`Command` 补 `cmd_seq`/`acked_at`/`created_by` | 下发覆盖率、回滚决策、审计需要这些事实 |
+| C13 | 新增 §4「语言与技术栈」：client/cloud 均为 Go，协议用 JSON 不上 protobuf，依赖清单与"明确不引入"清单定稿 | 语言技术栈此前未成文 |
 
 ---
 
@@ -96,11 +97,86 @@
 | D12 | Agent 运行凭证用**本机已有配置**，云端不下发 env/secret | 云端推送密钥既扩攻击面又制造密钥管理负担 |
 | D13 | v1 **任务不跨 Client 进程重启存活**；机器级多用户按 **1 OS 用户 = 1 device** | 显式声明边界，避免隐藏 bug；skill 在用户 home 下，按用户建模最简 |
 
-## 4. 组件设计
+## 4. 语言与技术栈
 
-### 4.1 Client（gs-agent-worker，每 OS 用户一个后台进程）
+**总原则**：能用 stdlib 不引库；client 与 cloud 同语言；每个依赖有明确理由；被 multica 验证过的方案优先（同栈可直接移植经验）。
 
-单二进制（**Go**：交叉编译单文件、WS 生态成熟、multica 同栈复用经验）。两种形态：`worker daemon`（后台服务）与 `worker ctl`（本机 CLI：login / status / logs / skills list / skills rollback）。
+### 4.1 语言：Go（client 与 cloud 同栈）
+
+1. Client 需要**单文件二进制 + 三平台交叉编译**（Windows/macOS/Linux × amd64/arm64）+ 开机自启注册，Go 是这个场景的最优解；
+2. **multica 同为 Go**（server 为 Go module），其 daemon 生命周期、autostart 注册、WS 重连、进程树管理的工程经验可直接移植；
+3. Cloud 初期单体，Go 的部署形态 = 一个二进制 + Postgres + 对象存储，运维面最小。
+
+备选否决理由：Rust（安全性更好但迭代效率不适合 P0-P2 快速验证期）；TypeScript/Node（client 打包单文件困难，后台守护进程体验差）。
+
+### 4.2 模块布局（monorepo）
+
+```
+gs-evo/
+├── client/        # gs-agent-worker（Go module）
+├── cloud/         # 云端单体服务（Go module）
+├── pkg/
+│   ├── proto/     # 协议消息类型 + 指令类型常量（两侧共享，单一事实）
+│   └── skillpkg/  # 共享工具：tar+gzip 打包、manifest 解析、ed25519 签名/验签
+├── deploy/        # docker-compose（cloud + postgres + minio）、systemd/LaunchAgent 模板
+└── docs/
+```
+
+### 4.3 协议序列化：JSON，不上 protobuf
+
+- 两侧同语言，共享 `pkg/proto` 结构体即可，无跨语言序列化需求；
+- 消息为低频控制面（指令/事件），非性能敏感数据面；JSON 文本帧**人可直接读**——审计与排障价值高（`Command.payload` 直接落 JSONB）；
+- `proto_version` 预留演进；未来若 client 需出 Rust 版，再抽 schema 并生成，届时协议已稳定，成本可控。
+
+### 4.4 Client 依赖清单
+
+| 用途 | 选型 | 说明 |
+|------|------|------|
+| CLI 子命令 | `spf13/cobra` | login / status / logs / skills / autostart 多子命令，事实标准 |
+| WebSocket | `gorilla/websocket` | 与 cloud 同库；**重连/退避/心跳自己写**（核心路径，逻辑简单且必须自持） |
+| 配置 | `BurntSushi/toml` | config.toml 读写 |
+| 日志 | `log/slog`（stdlib）+ `natefinch/lumberjack` | 结构化日志 + 文件轮转 |
+| 签名验签 | `crypto/ed25519`（stdlib） | D8 |
+| 打包 | `archive/tar` + `compress/gzip`（stdlib） | 内容寻址 bundle |
+| Windows 进程树 | `golang.org/x/sys/windows`（Job Object） | 平台文件用 `_windows.go` 后缀组织（multica 同款） |
+| 自更新（P4） | 自写（download → 验签 → rename swap） | ~200 行且必须接验签链，不引第三方自更新库 |
+
+### 4.5 Cloud 依赖清单
+
+| 用途 | 选型 | 说明 |
+|------|------|------|
+| HTTP 路由 | stdlib `net/http`（Go 1.22+ pattern routing） | 端点少，不引框架 |
+| WebSocket | `gorilla/websocket` | 与 client 同库 |
+| 数据库 | PostgreSQL 16+ | 唯一事实存储 |
+| DB 访问 | `sqlc` + `golang-migrate` | multica 同款（类型安全、SQL 即文档、编号版 up/down 迁移文件） |
+| 对象存储 | S3 兼容 API（`aws-sdk-go-v2`，endpoint 可配） | 自托管 MinIO；云上可直接换 S3/OSS |
+| 后台任务 | 同进程 goroutine + DB 队列表 | 初期不引 asynq/river/NATS——Evolution Engine 是异步 job，不是高吞吐队列 |
+| LLM 调用 | `anthropic-sdk-go`（模型端点可配） | Evolution Engine 的生成与评审 |
+| 管理界面 | P0-P2 用 `cloud ctl` CLI 子命令；Web 控制台 P3 后按需立项 | 初期不建前端 |
+
+### 4.6 明确不引入（及替代方案）
+
+| 不引入 | 替代 |
+|--------|------|
+| 微服务框架 / 服务网格 | 单体服务（§5.2 初期约束） |
+| Kafka / NATS / RabbitMQ | WSS 通道 + DB 队列表 |
+| Kubernetes | docker compose（自托管）；云上托管单机起步 |
+| ORM（GORM/ent） | sqlc 手写 SQL |
+| protobuf / gRPC | JSON over WSS（§4.3） |
+| 前端框架（初期） | CLI + 极简静态页；P3 后再定 |
+
+### 4.7 版本与工程化
+
+- Go ≥ 1.23；
+- 构建：`goreleaser` 交叉编译 client 多平台产物（P1 引入）；cloud 普通 `go build`；
+- CI：GitHub Actions——PR 跑 `gofmt`/`golangci-lint`/`go test`；main 分支出 docker 镜像；
+- 测试：单元测试（pkg 层全覆盖：proto、skillpkg、幂等缓存）；e2e 用 docker compose 起 cloud + 2 个 client 跑关键流程（P1 起：collect→install 全链路；P2 起：task 下发+断线补传）。
+
+## 5. 组件设计
+
+### 5.1 Client（gs-agent-worker，每 OS 用户一个后台进程）
+
+单二进制 Go 程序（语言与依赖选型见 §4.1/§4.4）。两种形态：`worker daemon`（后台服务）与 `worker ctl`（本机 CLI：login / status / logs / skills list / skills rollback）。
 
 | 模块 | 职责 |
 |------|------|
@@ -114,7 +190,7 @@
 
 **Client 刻意不含任何策略**：不决定何时进化、不决定装到哪台机器、不解析任务优先级。**但 Client 拥有两条不可协商的本地主权**：目录白名单的修改权、`require_confirm` 开关。
 
-### 4.2 Cloud（初期单体服务 + 数据库 + 对象存储）
+### 5.2 Cloud（初期单体服务 + 数据库 + 对象存储）
 
 | 模块 | 职责 |
 |------|------|
@@ -123,27 +199,27 @@
 | **Skill Registry** | skill 版本库：manifest + 内容包（内容寻址）；**stable 版本签名服务**（ed25519）；**状态机执行**（draft→candidate→reviewed→stable→deprecated，stable 转正 v1 一律管理员显式操作）；检索与比对 |
 | **Task Manager / Queue** | 任务创建（记录 `created_by`）、按设备排队、推送 `task.start`、汇聚过程事件与最终结果、断线重放事件 |
 | **Evolution Engine** | 自进化闭环（离线/异步）：消费清单与任务反馈 → 生成候选版本（带 diff 与理由）→ **产出 candidate（不是 stable）** → 灰度设备跑 EvaluationRun → 评审报告给管理员 → 人工放行后签名转 stable |
-| **Console/API** | 管理界面（初期 CLI 即可）：设备管理、skill 浏览与 diff 审阅、任务下发与审批、指令审计查询 |
+| **Console/API** | 管理界面（初期 `cloud ctl` CLI，见 §4.5）：设备管理、skill 浏览与 diff 审阅、任务下发与审批、指令审计查询 |
 
 **初期实现约束**：单体服务 + 一个数据库 + 一个对象存储；Evolution Engine 是同进程异步 job。**先不分微服务。**
 
-## 5. 通信协议
+## 6. 通信协议
 
-### 5.1 通道与心跳
+### 6.1 通道与心跳
 
 - 传输：`wss://cloud/api/v1/agent-ws`，JSON 文本帧；大文件走 `https://cloud/api/v1/bundles/*`（预签名 URL，一次性 PUT/GET）；
 - 鉴权：连接后首条 `hello` 携带 device token，失败即断；
 - 心跳：WS 协议层 ping/pong 优先，应用层 `ping`（30s）兜底；云端 **90s** 无任何帧判定离线（3 倍容忍）；
 - 重连：指数退避（1s→30s）+ 抖动；重连成功即重新 `hello`，云端按 `last_acked_cmd_seq` **补发未 ack 指令**，Client 补传 spool 中未送达结果。
 
-### 5.2 可靠投递：at-least-once + 幂等
+### 6.2 可靠投递：at-least-once + 幂等
 
 - 云端为每台设备维护单调递增 `cmd_seq`，每条指令携带 `{cmd_id, cmd_seq, expires_at?}`；
 - Client 处理完成后回 `cmd_result`，云端据此置 `acked_at`；
 - 连接断开期间下发的指令在重连后**补发**；Client 靠 `cmd_id` 幂等缓存保证**不重复执行**（`task.start`、`skills.install` 重复执行后果严重，这是硬要求）；
 - 指令默认有效期（如 10 分钟），过期未送达置 `expired`，避免陈旧指令迟到执行。
 
-### 5.3 统一指令模型
+### 6.3 统一指令模型
 
 云端 → 客户端只有一种消息形状：
 
@@ -180,7 +256,7 @@
 | `task.event` | `{task_id, seq, kind, data}`：stdout/stderr 增量、状态迁移、产物引用（超限内容只传引用） |
 | `ack` | `{cmd_seq}`：逐条确认收到（可并入 cmd_result，视实现合并） |
 
-### 5.4 hello 与对账
+### 6.4 hello 与对账
 
 ```json
 {
@@ -196,7 +272,7 @@
 
 要点：`proto_version` 不匹配云端直接断连并在错误中给出最低支持版本；`skills` 上报**完整列表**（数量级很小，不用摘要，无碰撞歧义），`local_state: clean|modified` 由磁盘 hash 与 `state.json` 比对得出——云端据此能发现"本地有未上报的改动"，可发起 collect 收走。
 
-### 5.5 Skill Manifest
+### 6.5 Skill Manifest
 
 ```json
 {
@@ -215,15 +291,15 @@
 
 `summary`/`capabilities` 从 `SKILL.md`（或 front-matter）解析；解析不出则上报纯 hash，由云端补齐。**多 agent 可移植性问题显式记录**：v1 假定 skill 面向 claude-code 格式；manifest 增加 `agent_compat: ["claude-code"]` 字段（v1 写死），为未来多 agent 类型预留判定依据。
 
-### 5.6 内容传输
+### 6.6 内容传输
 
 - **< 256KB**：base64 内嵌 `cmd_result.data.bundle`；
 - **≥ 256KB**：`skills.collect` 返回 `{upload_url}`（预签名 PUT），Client 直传对象存储；`skills.install` 同理给下载 URL；
 - 一律附 sha256；**stable 版本另附 ed25519 签名（对 sha256 值签名）**，Client 内置公钥，验签失败拒装并告警。
 
-## 6. 关键流程
+## 7. 关键流程
 
-### 6.1 上线注册与对账
+### 7.1 上线注册与对账
 
 ```
 Client                                Cloud
@@ -237,7 +313,7 @@ Client                                Cloud
 
 `policies` 仅允许包含收紧类字段（如 `disable_roots: [...]`、`max_concurrency`）；任何试图**新增**白名单目录的 policy 被 Client 忽略并记录审计日志（D10）。
 
-### 6.2 Skill 上行收集
+### 7.2 Skill 上行收集
 
 ```
 Cloud                                          Client
@@ -249,7 +325,7 @@ Cloud                                          Client
   │   落 SkillVer {source: collected, status: draft}，记录 origin_device
 ```
 
-### 6.3 Skill 下发安装（含冲突与回滚）
+### 7.3 Skill 下发安装（含冲突与回滚）
 
 ```
 Cloud                                              Client
@@ -265,7 +341,7 @@ Cloud                                              Client
 - **回滚**：`worker ctl skills rollback <name>`（本地用 `.prev` 秒回）或云端重发上一 stable 版本的 install 指令；
 - **Windows**：rename 覆盖遇被锁文件 → 退避重试（3 次）→ 失败回报，不部分覆盖。
 
-### 6.4 任务实时下发
+### 7.4 任务实时下发
 
 ```
 Cloud                                Client                          agent 进程
@@ -284,7 +360,7 @@ Cloud                                Client                          agent 进�
 - **断线场景**：Client 继续跑完任务，stdout 已落盘；重连后云端可 replay 事件 + Client 从 spool 补传最终结果；
 - v1 明示：**Client 进程重启后进行中任务即失败**（不恢复），任务目录按 TTL 回收。
 
-### 6.5 Skill 自进化闭环
+### 7.5 Skill 自进化闭环
 
 ```
  ①采集   skills.scan/collect ──▶ Skill Registry（全局视图：谁有什么、能做什么）
@@ -302,7 +378,7 @@ Cloud                                Client                          agent 进�
 - **Evolution Engine 与系统其余部分只通过 Skill Registry 的版本表交互**——进化策略可独立演进（规则→LLM→多 agent 评审），不影响通道与客户端；
 - P3 验收口径：**人工在环**跑通一条 skill 的完整闭环；全自动发布是 P4 目标，且以 EvaluationRun 历史数据证明评估可靠为前提。
 
-## 7. 数据模型（云端）
+## 8. 数据模型（云端）
 
 ```
 Device      {id, token_hash, hostname, os, arch, worker_version, labels[],
@@ -332,7 +408,7 @@ Command     {id, cmd_seq, device_id, cmd_type, payload, created_by,
 - `DeviceSkillInstall` 回答"哪个版本覆盖到哪台机器、结果如何"——灰度决策与回滚范围的依据；
 - `EvaluationRun` 留存 LLM-judge 原始输出——评估结论必须可复查、可迭代。
 
-## 8. 安全
+## 9. 安全
 
 **诚实的前提**：`task.start` 把 prompt 交给本机有 shell 工具的 coding agent，**实质上等于云端可间接执行任意命令**。因此安全模型的核心不是"指令封闭枚举"（那只是收窄接口），而是下面四层：
 
@@ -346,7 +422,7 @@ Command     {id, cmd_seq, device_id, cmd_type, payload, created_by,
 | 内容 | 包 sha256 校验；**stable 版本 ed25519 签名，Client 内置公钥验签，v1 即启用**（D8）；进化产物强制人工审后才可签名 |
 | 吊销 | 云端吊销 token 后 Gateway 立即断连并拒绝重连 |
 
-## 9. 本地布局（Client）
+## 10. 本地布局（Client）
 
 ```
 ~/.gs-agent-worker/
@@ -368,7 +444,7 @@ Command     {id, cmd_seq, device_id, cmd_type, payload, created_by,
 
 开机自启：Windows 计划任务/Run 键、macOS LaunchAgent、Linux systemd user unit（multica 同款，`worker autostart enable`）。
 
-## 10. 可扩展性
+## 11. 可扩展性
 
 扩展一律走"**新指令类型 + 新处理器**"，通道、网关、审计、幂等、SDK 全部复用：
 
@@ -385,7 +461,7 @@ Command     {id, cmd_seq, device_id, cmd_type, payload, created_by,
 
 反向兼容：Client 遇到未知 `cmd_type` 回 `{ok:false, error:"unsupported"}`；hello 的 `proto_version` + `capabilities` 让云端按设备能力下发，升级永不阻塞。
 
-## 11. 实施路线
+## 12. 实施路线
 
 | 阶段 | 范围 | 验收标准 |
 |------|------|----------|
@@ -397,7 +473,7 @@ Command     {id, cmd_seq, device_id, cmd_type, payload, created_by,
 
 P2 动工前置条件：`docs/AGENT-PROTOCOL.md`（内部 stdio JSON-lines 协议规范，以 claude `stream-json` 为基型、吸收 ACP 会话/权限语义）评审通过。
 
-## 12. 开放问题（需产品决策）
+## 13. 开放问题（需产品决策）
 
 1. **首批接入机器数量**：若个位数，P1 期间可并行用一个 git 同步脚本过渡（拿到七成价值），正式通道按本方案推进；
 2. **默认 permission_mode**：建议 `readonly` 起步，观察一段时间再放宽；
