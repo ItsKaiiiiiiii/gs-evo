@@ -54,6 +54,14 @@ func PackDir(dir string, w io.Writer) (string, int64, error) {
 			return hdrErr
 		}
 		hdr.Name = filepath.ToSlash(rel)
+		// 规范化元数据：内容寻址要求"同内容同字节"（mtime/uid 等不得进哈希）
+		hdr.ModTime = time.Unix(0, 0)
+		hdr.AccessTime = time.Time{}
+		hdr.ChangeTime = time.Time{}
+		hdr.Uid = 0
+		hdr.Gid = 0
+		hdr.Uname = ""
+		hdr.Gname = ""
 		if !info.Mode().IsRegular() {
 			return nil // 只打包常规文件与目录
 		}

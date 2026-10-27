@@ -499,16 +499,23 @@ func (s *Server) onCmdResult(deviceID string, res *proto.CmdResult) {
 
 // onTaskResult task.start 终态 → task 表归态（§7.4）。
 func (s *Server) onTaskResult(deviceID string, res *proto.CmdResult) {
-	if res.Data == nil {
-		return
-	}
 	raw, _ := json.Marshal(res.Data)
 	var tr proto.TaskResult
-	if json.Unmarshal(raw, &tr) != nil || tr.TaskID == "" {
-		return
+	_ = json.Unmarshal(raw, &tr)
+	// 启动失败时 data 里没有 task_id：从指令 payload 取（NEW-1：否则任务永久僵尸 queued）
+	if tr.TaskID == "" {
+		cmd, err := s.st.GetCommand(res.CmdID)
+		if err != nil || cmd == nil {
+			return
+		}
+		if tid, _ := cmd.Payload["task_id"].(string); tid != "" {
+			tr.TaskID = tid
+		} else {
+			return
+		}
 	}
 	if !res.OK && tr.Status == "" {
-		// 任务没能启动（spawn 失败等）：归 failed
+		// 任务没能启动（spawn 失败等）：归 failed，错误浮出到任务结果
 		_ = s.st.SetTaskResult(tr.TaskID, proto.TaskFailed,
 			map[string]any{"error": res.Error})
 		return

@@ -143,6 +143,21 @@ type TaskEventRow struct {
 	TS     time.Time      `json:"ts"`
 }
 
+// ExpireStaleTasks task.start 指令已过期的任务置 expired（防僵尸 queued，NEW-1）。
+func (s *Store) ExpireStaleTasks() (int64, error) {
+	res, err := s.DB.Exec(`UPDATE task SET status='expired', finished_at=NOW(3),
+		result=JSON_OBJECT('error','command expired before delivery/ack')
+		WHERE status IN ('queued','running')
+		  AND id IN (
+		    SELECT JSON_UNQUOTE(JSON_EXTRACT(payload,'$.task_id')) FROM command
+		    WHERE cmd_type='task.start' AND status='expired'
+		  )`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func (s *Store) ListTaskEvents(taskID string, fromSeq int64, limit int) ([]*TaskEventRow, error) {
 	if limit <= 0 || limit > 2000 {
 		limit = 500

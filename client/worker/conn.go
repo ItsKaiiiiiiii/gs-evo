@@ -57,7 +57,7 @@ func NewEngine(h Home, log *slog.Logger) (*Engine, error) {
 		return nil, err
 	}
 	if cfg.Token == "" {
-		return nil, errors.New("no device token in config (run `worker ctl login`)")
+		return nil, errors.New("no device token in config (run `gs-worker login`)")
 	}
 	e := &Engine{
 		Home: h, Cfg: cfg, Log: log,
@@ -123,7 +123,7 @@ func (e *Engine) serveOnce(ctx context.Context) (bool, error) {
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
 			// 401：不退出不清配置，持续提醒（§6.7 生命周期）
-			e.Log.Warn("auth rejected (401) — run `worker ctl login` to re-enroll")
+			e.Log.Warn("auth rejected (401) — run `gs-worker login` to re-enroll")
 			return false, nil
 		}
 		return false, err
@@ -423,7 +423,7 @@ func (e *Engine) renewLoop(ctx context.Context) {
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode == http.StatusUnauthorized {
-			e.Log.Warn("token renewal rejected — run `worker ctl login`")
+			e.Log.Warn("token renewal rejected — run `gs-worker login`")
 			return
 		}
 		var out struct {

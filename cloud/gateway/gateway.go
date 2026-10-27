@@ -274,6 +274,11 @@ func (g *Gateway) StartExpirySweeper(interval time.Duration, stop <-chan struct{
 				} else if n > 0 {
 					g.log.Info("expired stale commands", "count", n)
 				}
+				if n, err := g.store.ExpireStaleTasks(); err != nil {
+					g.log.Warn("task expire sweep failed", "err", err)
+				} else if n > 0 {
+					g.log.Info("expired stale tasks", "count", n)
+				}
 			case <-stop:
 				return
 			}

@@ -25,29 +25,26 @@ import (
 
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	// --help/-h：任何层级都以 exit 0 输出帮助（P2-7）
+	// --help/-h：任何层级都以 exit 0 输出帮助；有子命令帮助则用分级版（N-P3-4/6）
+	helpRequested := false
 	for _, a := range os.Args[1:] {
 		if a == "--help" || a == "-h" {
-			fmt.Println(usageText())
-			return
+			helpRequested = true
 		}
+	}
+	if helpRequested {
+		if len(os.Args) >= 2 {
+			if txt, ok := subHelp[os.Args[1]]; ok && len(os.Args) >= 2 {
+				fmt.Println(txt)
+				return
+			}
+		}
+		fmt.Println(usageText())
+		return
 	}
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
-	}
-	// 分命令 --help（N-P3-6）：每个子命令有自己的 flag 说明
-	if len(os.Args) >= 3 {
-		for _, a := range os.Args[2:] {
-			if a == "--help" || a == "-h" {
-				if txt, ok := subHelp[os.Args[1]]; ok {
-					fmt.Println(txt)
-				} else {
-					fmt.Println(usageText())
-				}
-				return
-			}
-		}
 	}
 	var err error
 	switch os.Args[1] {
@@ -484,8 +481,18 @@ func cmdSkill(args []string) error {
 				fmt.Printf("  [%s] 安装失败：%v\n", it.Device, row.err)
 			default:
 				res := row.data
-				fmt.Printf("  [%s] 安装成功：%s v%s（替换 %s）\n", it.Device,
-					nameOr(res["name"]), strOr(res["installed"]), strOr(res["replaced"]))
+				switch res["result"] {
+				case "installed":
+					fmt.Printf("  [%s] 安装成功：%s v%s（替换 %s）\n", it.Device,
+						nameOr(res["name"]), strOr(res["installed"]), strOr(res["replaced"]))
+				case "already_installed":
+					fmt.Printf("  [%s] 已是目标版本 %s（幂等跳过，未改动磁盘）\n", it.Device, strOr(res["installed"]))
+				case "conflict_skipped":
+					fail = true
+					fmt.Printf("  [%s] 跳过安装：设备本地有改动（保留现场）。如需覆盖请加 --on-conflict overwrite\n", it.Device)
+				default:
+					fmt.Printf("  [%s] 结果：%v\n", it.Device, res)
+				}
 			}
 		}
 		if fail {

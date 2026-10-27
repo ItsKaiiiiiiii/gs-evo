@@ -92,28 +92,38 @@ func (e *Engine) Scan(ctx context.Context, payload map[string]any) (map[string]a
 func (e *Engine) handleCollect(ctx context.Context, payload map[string]any) (map[string]any, error) {
 	var p proto.CollectPayload
 	b, _ := json.Marshal(payload)
-	if err := json.Unmarshal(b, &p); err != nil || p.Name == "" || p.Root == "" {
-		return nil, errors.New("need name and root")
+	if err := json.Unmarshal(b, &p); err != nil || p.Name == "" {
+		return nil, errors.New(`bad collect payload: 需要 {"name":"<skill 名>", "root":"<白名单根目录，可省略>"}`)
 	}
-	root := absPath(expandHome(p.Root))
-	found := false
-	var dir string
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil || !d.IsDir() {
-			return nil
-		}
-		if _, statErr := os.Stat(filepath.Join(path, "SKILL.md")); statErr == nil {
-			m, mErr := skillLoadManifest(path, root, e.installedHashes())
-			if mErr == nil && m.Name == p.Name {
-				dir = path
-				found = true
-				return filepath.SkipAll
+	// root 可省略：在全部白名单根里找该 skill（NEW-5）
+	var searchRoots []string
+	if p.Root != "" {
+		searchRoots = []string{absPath(expandHome(p.Root))}
+	} else {
+		searchRoots = e.expandRoots(nil)
+	}
+	var root string
+	dir := ""
+	for _, sr := range searchRoots {
+		_ = filepath.WalkDir(sr, func(path string, d os.DirEntry, err error) error {
+			if err != nil || !d.IsDir() {
+				return nil
 			}
+			if _, statErr := os.Stat(filepath.Join(path, "SKILL.md")); statErr == nil {
+				if m, mErr := skillLoadManifest(path, sr, e.installedHashes()); mErr == nil && m.Name == p.Name {
+					dir = path
+					root = sr
+					return filepath.SkipAll
+				}
+			}
+			return nil
+		})
+		if dir != "" {
+			break
 		}
-		return nil
-	})
-	if !found {
-		return nil, fmt.Errorf("skill %q not found under %s", p.Name, p.Root)
+	}
+	if dir == "" {
+		return nil, fmt.Errorf("skill %q 在白名单目录中未找到（检查名称或先 skills.scan 确认）", p.Name)
 	}
 
 	_ = os.MkdirAll(e.Home.CacheDir(), 0o700)
@@ -219,7 +229,7 @@ func (e *Engine) handleInstall(ctx context.Context, payload map[string]any) (map
 		if expected != "" && actualDirHash == expected && prev == p.Version {
 			ir.Result = "already_installed"
 			ir.Installed = p.Version
-			ir.Replaced = prev
+			ir.Replaced = "none" // 什么都没替换（NEW-6：语义=本次实际被备份的版本）
 			data, _ := structToMap(ir)
 			return data, nil
 		}
@@ -245,6 +255,13 @@ func (e *Engine) handleInstall(ctx context.Context, payload map[string]any) (map
 	prevDir := target + ".prev"
 	_ = os.RemoveAll(prevDir)
 	if _, err := os.Stat(target); err == nil {
+		// replaced 取被备份目录的真实版本（含本地未纳管版本，标 local 前缀）
+		if m, mErr := skillLoadManifest(target, "", nil); mErr == nil {
+			prev = m.Version
+			if _, managed := e.State.Installed[p.Name]; !managed || e.State.Installed[p.Name].Version != m.Version {
+				prev = "local:" + m.Version
+			}
+		}
 		if err := skillRename(target, prevDir); err != nil {
 			return nil, fmt.Errorf("backup prev: %w", err)
 		}

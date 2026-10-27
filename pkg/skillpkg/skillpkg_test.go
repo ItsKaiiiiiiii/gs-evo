@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeTree(t *testing.T, files map[string]string) string {
@@ -128,5 +129,26 @@ func TestSignVerify(t *testing.T) {
 	}
 	if err := Verify(pub, sha, strings.Repeat("00", 64)); err == nil {
 		t.Fatal("verify must fail for bad signature")
+	}
+}
+
+func TestPackDeterministicIgnoreMtime(t *testing.T) {
+	src := writeTree(t, map[string]string{"SKILL.md": "---\nname: d\nversion: 1\n---\nsame"})
+	var b1, b2 bytes.Buffer
+	sha1, _, err := PackDir(src, &b1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// touch：只改 mtime，不改内容
+	future := time.Now().Add(2 * time.Hour)
+	if err := os.Chtimes(filepath.Join(src, "SKILL.md"), future, future); err != nil {
+		t.Fatal(err)
+	}
+	sha2, _, err := PackDir(src, &b2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sha1 != sha2 {
+		t.Fatalf("content hash must ignore mtime: %s vs %s", sha1[:8], sha2[:8])
 	}
 }

@@ -78,7 +78,7 @@ func (h Home) DeviceIDPath() string { return filepath.Join(h.Dir, "device.id") }
 func (h Home) LogPath() string      { return filepath.Join(h.Dir, "worker.log") }
 
 // LoadConfig 读 config.toml；不存在返回 errNoConfig。
-var errNoConfig = errors.New("config not found (run `worker ctl login` first)")
+var errNoConfig = errors.New("本机尚未注册：先运行 gs-worker login --server <云端地址> --enroll <token>")
 
 func (h Home) LoadConfig() (*Config, error) {
 	raw, err := os.ReadFile(h.ConfigPath())
