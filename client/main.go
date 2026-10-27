@@ -93,7 +93,6 @@ func cmdLogin(home worker.Home, args []string) error {
 	pubkey := fs.String("signing-pubkey", worker.EnvOr("GS_WORKER_SIGNING_PUBKEY", ""), "ed25519 signing pubkey hex")
 	_ = pubkey // 由下方 cfg 引用
 	root := fs.String("skills-root", worker.EnvOr("GS_WORKER_SKILLS_ROOT", worker.DefaultSkillsRoot()), "whitelisted skills dir (repeatable not supported here)")
-	_ = fs.String("labels", "", "device labels (reserved, v1 local only)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

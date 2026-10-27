@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gs-evo 控制台</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<!-- 登录遮罩：admin token 存 localStorage，走 API 层 Bearer 鉴权 -->
+<div id="login-mask" class="login-mask hidden">
+  <div class="login-box">
+    <h2>gs-evo 控制台</h2>
+    <p class="muted">输入管理端 token（gsa_ 开头，由 gs-cloud 首次启动生成或 token create 签发）</p>
+    <input id="login-token" type="password" placeholder="粘贴 token" autocomplete="off">
+    <button id="login-btn">登录</button>
+    <div id="login-err" class="err"></div>
+  </div>
+</div>
+
+<div id="app" class="app hidden">
+  <aside class="sidebar">
+    <div class="brand">gs-evo</div>
+    <nav id="nav"></nav>
+    <div class="sidebar-foot">
+      <span id="role-badge" class="badge"></span>
+      <button id="logout-btn" class="link">退出</button>
+    </div>
+  </aside>
+  <main id="content" class="content"></main>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="js/api.js"></script>
+<script src="js/pages/devices.js"></script>
+<script src="js/pages/skills.js"></script>
+<script src="js/pages/tasks.js"></script>
+<script src="js/pages/evo.js"></script>
+<script src="js/pages/report.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

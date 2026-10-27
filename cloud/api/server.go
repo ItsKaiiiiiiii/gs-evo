@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/ItsKaiiiiiiii/gs-evo/cloud/auth"
+	"github.com/ItsKaiiiiiiii/gs-evo/cloud/console"
 	"github.com/ItsKaiiiiiiii/gs-evo/cloud/evo"
 	"github.com/ItsKaiiiiiiii/gs-evo/cloud/gateway"
 	"github.com/ItsKaiiiiiiii/gs-evo/cloud/skillsvc"
@@ -125,6 +126,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/bundles/tickets", s.authDevice(s.handleTicket))
 	mux.HandleFunc("PUT /api/v1/bundles/{sha256}", s.handleBundlePut)
 	mux.HandleFunc("GET /api/v1/bundles/{sha256}", s.handleBundleGet)
+
+	// Web 控制台（静态资源，数据操作走 Bearer 鉴权的 API）
+	mux.HandleFunc("GET /{$}", console.Redirect)
+	mux.HandleFunc("GET /console", console.Redirect)
+	mux.Handle("GET /console/", console.Handler())
 
 	// 管理面（gsa_ Bearer）
 	mux.HandleFunc("POST /api/v1/admin/enroll-tokens", s.authAdmin(s.handleCreateEnroll))

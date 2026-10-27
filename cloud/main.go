@@ -142,28 +142,43 @@ func usage() {
 func usageText() string {
 	return `usage: gs-cloud <command> [flags]
 
-  serve                                  start cloud server
-  key show                               show ed25519 signing public key
-  enroll create [--label L]              create one-time enroll token (24h)
-  device list | device revoke --id ID | device label --id ID --label L... | device label --id ID --label L...
-  cmd send --device ID --type T [--payload JSON] [--ttl S]
-  cmd list --device ID [--limit N]
-  skill list | skill versions --name N
+设备管理:
+  device list                                    设备列表（在线状态/标签）
+  device revoke --id ID                          吊销设备（立即踢线并拒绝重连）
+  device label --id ID --label L...              设置设备标签（rollout 圈定用）
+  enroll create [--label L]                      签发一次性 enroll token（24h）
+
+skill 管理:
+  skill list                                     全部 skill（含 latest_stable）
+  skill versions --name N                        版本列表与状态机位置
   skill set-status --name N --version V --status S
-  skill install --name N --version V --target-root R [--device ID]... [--label L] [--on-conflict skip|overwrite]
-  task create --device ID --prompt P [--agent T] [--timeout S] [--max-permission M]
-  task list --device ID [--limit N]
-  task events --task ID [--from-seq N]
-  task cancel --task ID
-  benchmark create --name N --cases-file F.json
-  evolve --name N [--parent V] --instruction TEXT
-  evaluate --name N --version V --benchmark ID --device ID... [--install --target-root R]
-  runs --name N --version V | diff --name N --version V
-  runs --name N --version V          查看 EvaluationRun 列表
-  diff --name N --version V          审阅候选与父本的 SKILL.md 差异
-  policy --name N --show | --enable --min-pass-rate R --min-runs N [--target-root R] [--label L]... | --disable
-  client-update push --version V --file F [--notes X] | rollout --version V [--device ID]... [--label L]...
-  report | token create --role admin|viewer [--label L]
+                                                 状态机: draft→candidate→reviewed→stable
+  skill install --name N --version V --target-root R [--device ID]... [--label L]...
+                                                 下发安装（仅 stable；默认等逐台回执）
+  cmd send --device ID --type T [--payload JSON] 原始指令（scan/collect 等）
+  cmd list --device ID [--limit N]               指令审计与结果
+
+任务:
+  task create --device ID --prompt P [--agent T] [--timeout 秒]
+  task list --device ID [--limit N]              任务状态
+  task events --task ID [--from-seq N]           过程事件流
+  task cancel --task ID                          取消（杀进程树）
+
+进化闭环:
+  benchmark create --name N --cases-file F.json  基准集（JSON 数组用例）
+  evolve --name N --instruction TEXT [--parent V] 生成改进候选
+  diff --name N --version V                      审阅候选差异与 rationale
+  evaluate --name N --version V --benchmark ID --device ID...
+                                                 灰度评估（--install 先装候选）
+  runs --name N --version V                      评估历史
+  policy --name N --show | --enable ... | --disable  自动发布策略（默认关闭）
+
+运营:
+  client-update push --version V --file F        发布新 worker 二进制
+  client-update rollout --version V [--device ID]... [--label L]...
+  report                                         一屏总览（设备/skill/指令统计）
+  token create --role admin|viewer               签发管理 token
+  key show                                       查看签名公钥（worker 配置用）
 
 env: GSEVO_DSN GSEVO_ADDR GSEVO_DATA_DIR GSEVO_ADMIN_TOKEN GSEVO_PUBLIC_URL
 cli: GSEVO_URL (default http://127.0.0.1:8080) GSEVO_ADMIN_TOKEN
@@ -514,7 +529,7 @@ func cmdTask(args []string) error {
 	device := fs.String("device", "", "device id")
 	prompt := fs.String("prompt", "", "task prompt")
 	agent := fs.String("agent", "", "agent type")
-	timeout := fs.Int("timeout", 0, "watchdog seconds")
+	timeout := fs.Int("timeout", 0, "看门狗超时（单位：秒，整数）")
 	maxPerm := fs.String("max-permission", "", "readonly|edits|full")
 	taskID := fs.String("task", "", "task id")
 	limit := fs.Int("limit", 50, "list limit")

@@ -55,6 +55,18 @@ gs-evo/
 
 详细验收标准见 [DESIGN.md §12](docs/DESIGN.md)。
 
+## Web 控制台
+
+gs-cloud 内嵌轻量控制台（纯前端，复用 admin API 与 Bearer 鉴权），浏览器打开：
+
+```
+http://<云端地址>/console/
+```
+
+- 登录：粘贴 admin token（gsa_ 开头；gs-cloud 首启生成，或 `gs-cloud token create` 签发，viewer 角色自动只读）
+- 页面：设备（状态/标签/吊销）· Skill（版本状态机/diff 审阅/安装）· 任务（下发/事件流/取消）· 进化（基准/生成/评估/自动发布策略）· 报表
+- 扩展：页面即模块——`cloud/console/static/js/pages/` 下加一个 js 文件并 `App.register(...)` 即成新页面，后端零改动
+
 ## 快速开始（开发）
 
 依赖：Go ≥ 1.23、MySQL 8（库与用户自建）。
