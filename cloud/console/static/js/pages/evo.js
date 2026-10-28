@@ -1,11 +1,11 @@
 // evo.js：进化页（降级为全局队列）——跨实体对象：BenchmarkSet + 全局 EvaluationRun。
 // 生成/评估/策略等动作已下沉到「Skill」实体页（评审裂伤一修复）。
 (function () {
+  const API_ = '/api/v1/admin';
   async function render(c) {
-    const [bms, runs] = await Promise.all([
-      API.get(`${API_}/benchmarks`),
-      API.get(`${API_}/evaluations?limit=50`).catch(() => []),
-    ]);
+    let bms = [], runs = [];
+    try { bms = await API.get(`${API_}/benchmarks`); } catch (e) { /* viewer 降级 */ }
+    try { runs = await API.get(`${API_}/evaluations?limit=50`); } catch (e) { runs = []; }
 
     c.innerHTML = `<div class="page-title">进化（全局队列）</div>
     <p class="muted" style="margin-bottom:12px">生成/评估/策略等动作已收进各 Skill 的详情页；本页是跨实体对象的全局视图。</p>

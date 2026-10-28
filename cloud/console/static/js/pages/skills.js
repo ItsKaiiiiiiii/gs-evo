@@ -28,7 +28,13 @@
       </div>
       <div id="ver-view"><div class="card">加载中…</div></div>`;
 
-    const skills = await API.get(`${API_}/skills`);
+    let skills = [];
+    try {
+      skills = await API.get(`${API_}/skills`);
+    } catch (e) {
+      c.innerHTML = `<div class="page-title">Skill</div><div class="card"><span class="muted">无法加载 skill 列表：${App.esc(e.message)}</span></div>`;
+      return;
+    }
     const sel = document.getElementById('skill-name');
     sel.innerHTML = skills.map(s => `<option>${App.esc(s.name)}</option>`).join('') || '<option disabled>暂无 skill（在「任务与操作」页点「扫描/获取」收集）</option>';
     document.getElementById('skill-refresh').onclick = () => render(c);
