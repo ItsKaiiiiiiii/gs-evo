@@ -64,7 +64,8 @@ http://<云端地址>/console/
 ```
 
 - 登录：粘贴 admin token（gsa_ 开头；gs-cloud 首启生成，或 `gs-cloud token create` 签发，viewer 角色自动只读）
-- 页面（实体轴 IA，总览为着陆页）：**总览**（健康+客户端升级入口）· **设备**（实体详情：装机清单/指令历史/任务历史/标签/吊销）· **Skill**（实体详情：版本时间线=diff+rationale+评估历史+自动策略+覆盖率，生成/评估/安装动作内联）· **任务与操作**（一键扫描/获取 skill/探测 agent + 自定义任务）· **进化**（全局队列：BenchmarkSet + EvaluationRun）· **审计**（指令全量历史+操作者+token 管理）
+- 页面（实体轴 IA，总览为着陆页）：**总览**（健康+客户端升级入口）· **设备**（实体详情：运行时/装机清单/指令历史/任务历史/标签/吊销，详情内可**添加运行时**）· **Skill**（实体详情：版本时间线=diff+rationale+评估历史+自动策略+覆盖率，生成/评估/安装动作内联）· **任务与操作**（**运行时中心**：选择运行时 → 一键扫描/获取 skill/探测 agent；自定义任务按运行时精确指派；任务列表/事件流/取消）· **进化**（全局队列：BenchmarkSet + EvaluationRun）· **审计**（指令全量历史+操作者+token 管理）
+- **操作手册**：[docs/CONSOLE.md](docs/CONSOLE.md)——各页面能做什么、常见疑问、页面操作与 CLI 对照表
 - 扩展：页面即模块——`cloud/console/static/js/pages/` 下加一个 js 文件并 `App.register(...)` 即成新页面，后端零改动
 
 ## 运行时（Runtime）：agent 实例一等实体
