@@ -35,6 +35,19 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "device revoked")
 		return
 	}
+	// runtime 归属校验：runtime_id 必须属于目标设备（防跨设备误指派）
+	if req.RuntimeID != "" {
+		rt, err := s.st.GetRuntime(req.DeviceID, req.RuntimeID)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		if rt == nil {
+			writeErr(w, http.StatusBadRequest,
+				"runtime "+req.RuntimeID+" 不属于该设备（请刷新运行时列表后重选）")
+			return
+		}
+	}
 
 	taskID := proto.NewID("t-")
 	// 先建 task 行再发指令：否则首个 task.event 会先于任务落库到达而被丢弃

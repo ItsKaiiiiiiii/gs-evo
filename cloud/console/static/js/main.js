@@ -24,6 +24,13 @@
       document.getElementById('login-mask').classList.remove('hidden');
       document.getElementById('app').classList.add('hidden');
     },
+    fmtTime(iso) {
+      if (!iso) return '-';
+      const d = new Date(iso);
+      if (isNaN(d)) return App.esc(iso);
+      const p = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    },
     esc(s) {
       const d = document.createElement('div');
       d.textContent = s == null ? '' : String(s);
@@ -65,7 +72,7 @@
       a.className = 'nav-item';
       a.dataset.id = p.id;
       a.textContent = p.title;
-      a.onclick = () => App.go(p.id);
+      a.onclick = () => { location.hash = '#' + p.id; };
       nav.appendChild(a);
     });
 
@@ -86,9 +93,19 @@
       location.reload();
     };
 
-    // 已有 token 直接进入
+    // hash 单一事实源：导航点击只改 hash，路由统一由 hashchange 驱动（前进/后退可用）
+    window.addEventListener('hashchange', () => {
+      const target = (location.hash || '').replace('#', '');
+      if (pages.some(p => p.id === target)) App.go(target);
+    });
+
+    // 已有 token 直接进入；恢复 hash 定位的页面（N-10）
     if (API.token()) {
-      tryLogin(API.token()).then(enterApp).catch(() => App.onAuthFailed());
+      tryLogin(API.token()).then(() => {
+        enterApp();
+        const target = (location.hash || '').replace('#', '');
+        App.go(pages.some(p => p.id === target) ? target : (pages[0] ? pages[0].id : 'report'));
+      }).catch(() => App.onAuthFailed());
     } else {
       App.onAuthFailed();
     }

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 
 	"github.com/ItsKaiiiiiiii/gs-evo/pkg/proto"
@@ -62,6 +63,19 @@ func (s *Store) ListRuntimes() ([]*RuntimeWithDevice, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// GetRuntime 校验运行时归属于指定设备（任务指派防串）。
+func (s *Store) GetRuntime(deviceID, runtimeID string) (*RuntimeRow, error) {
+	r := new(RuntimeRow)
+	err := s.DB.QueryRow(`SELECT id, device_id, type, COALESCE(version,''), COALESCE(path,''),
+		ok, source, DATE_FORMAT(last_seen, '%Y-%m-%dT%H:%i:%sZ') FROM runtime
+		WHERE device_id=? AND id=?`, deviceID, runtimeID).
+		Scan(&r.ID, &r.DeviceID, &r.Type, &r.Version, &r.Path, &r.OK, &r.Source, &r.LastSeen)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return r, err
 }
 
 func (s *Store) ListRuntimesByDevice(deviceID string) ([]*RuntimeRow, error) {

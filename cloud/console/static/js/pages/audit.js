@@ -15,12 +15,13 @@
 
   async function render(c) {
     const devices = await API.get(`${API_}/devices`);
+    const hostOf = id => { const d = (devices || []).find(x => x.id === id); return d ? d.hostname + '（' + id.slice(0, 8) + '）' : id; };
     c.innerHTML = `<div class="page-title">审计</div>
     <div class="card">
       <h3>指令历史（全量，最近 200 条）</h3>
       <div class="form-row">
         <label>设备</label>
-        <select id="a-device"><option value="">全部</option>${devices.map(d => `<option value="${d.id}">${App.esc(d.hostname)}</option>`).join('')}</select>
+        <select id="a-device"><option value="">全部</option>${devices.map(d => `<option value="${d.id}">${App.esc(d.hostname)}（${App.esc(d.id.slice(0, 8))}）</option>`).join('')}</select>
         <label>类型</label>
         <select id="a-type"><option value="">全部</option>
           ${['agent.probe', 'skills.scan', 'skills.collect', 'skills.install', 'task.start', 'task.cancel', 'task.events_replay', 'client.update'].map(t => `<option>${t}</option>`).join('')}
@@ -52,7 +53,7 @@
       if (type) cmds = cmds.filter(x => x.cmd_type === type);
       if (status) cmds = cmds.filter(x => x.status === status);
       const rows = (cmds || []).map(cmd => `<tr>
-        <td>${App.esc((cmd.issued_at || '').replace('T', ' ').slice(0, 19))}</td>
+        <td>${App.fmtTime(cmd.issued_at)}</td>
         <td title="${App.esc(cmd.device_id)}">${App.esc(cmd.device_id.slice(0, 13))}…</td>
         <td>${App.esc(cmd.cmd_type)}</td>
         <td>${statusBadge(cmd.status, cmd.result)}</td>

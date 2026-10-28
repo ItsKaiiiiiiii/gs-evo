@@ -42,7 +42,7 @@
         <td>${App.esc(d.worker_version || '-')}</td>
         <td>${badge(d.status)}</td>
         <td>${(d.labels || []).map(l => `<span class="badge blue">${App.esc(l)}</span>`).join(' ')}</td>
-        <td>${App.esc(d.last_seen || '-')}</td>
+        <td>${App.fmtTime(d.last_seen)}</td>
       </tr>`).join('');
       document.getElementById('dev-table').innerHTML = `<table>
         <tr><th>ID</th><th>主机名</th><th>平台</th><th>worker</th><th>状态</th><th>标签</th><th>最后在线</th></tr>
@@ -74,13 +74,13 @@
         <td><b>${App.esc(i.skill)}</b></td><td>v${App.esc(i.version)}</td>
         <td>${i.result === 'ok' ? '<span class="badge green">已安装</span>' : i.result === 'conflict_skipped' ? '<span class="badge yellow">跳过</span>' : '<span class="badge red">' + App.esc(i.result) + '</span>'}
             ${i.signed ? '<span class="badge blue">已签名</span>' : ''}</td>
-        <td>${App.esc((i.installed_at || '').replace('T', ' ').slice(0, 19))}</td></tr>`).join('') ||
+        <td>${App.fmtTime(i.installed_at)}</td></tr>`).join('') ||
         '<tr><td colspan="4" class="muted">无装机记录</td></tr>';
 
       const cmdRows = (cmds === null)
         ? '<tr><td colspan="5" class="muted">无权限查看指令历史（需要 admin token）</td></tr>'
         : (cmds || []).map(cmd => `<tr>
-        <td>${App.esc((cmd.issued_at || '').replace('T', ' ').slice(0, 19))}</td>
+        <td>${App.fmtTime(cmd.issued_at)}</td>
         <td>${App.esc(cmd.cmd_type)}</td>
         <td>${cmd.status === 'acked' ? (cmd.result && cmd.result.ok === false ? '<span class="badge red">失败</span>' : '<span class="badge green">成功</span>') : statusCmd(cmd.status)}</td>
         <td>${App.esc(cmd.created_by || '-')}</td>
@@ -93,7 +93,7 @@
         <td title="${App.esc(t.id)}">${App.esc(t.id.slice(0, 13))}…</td>
         <td title="${App.esc(t.prompt)}">${App.esc(t.prompt.slice(0, 30))}</td>
         <td>${statusBadge(t.status)}</td>
-        <td>${App.esc((t.created_at || '').replace('T', ' ').slice(0, 19))}</td></tr>`).join('') ||
+        <td>${App.fmtTime(t.created_at)}</td></tr>`).join('') ||
         '<tr><td colspan="4" class="muted">无任务</td></tr>';
 
       view.innerHTML = `

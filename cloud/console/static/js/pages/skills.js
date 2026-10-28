@@ -61,6 +61,14 @@
     }
 
     sel.onchange = () => loadVersions(sel.value);
+    // 深链接预填：任务页「去 Skill 页审阅 X」
+    try {
+      const pre = sessionStorage.getItem('gsevo_prefill_skill');
+      if (pre) {
+        sessionStorage.removeItem('gsevo_prefill_skill');
+        if ([...sel.options].some(o => o.value === pre)) sel.value = pre;
+      }
+    } catch (e) { /* 忽略 */ }
     if (skills.length) await loadVersions(sel.value);
     else document.getElementById('ver-view').innerHTML = '<div class="card"><span class="muted">暂无 skill。去「任务与操作」页点「扫描 skill / 获取全部 skill」收集第一份。</span></div>';
   }
