@@ -75,7 +75,7 @@ if (typeof sandbox.App !== 'object') { console.error('FAIL: window.App 未定义
 for (const fn of domReadyHandlers) { try { fn(); } catch (e) { console.error(`FAIL: boot 异常: ${e.message}`); failed = true; } }
 
 const navItems = (elements['nav']?.children || []).length;
-if (navItems !== 7) { console.error(`FAIL: 导航项 ${navItems} 个，期望 7（总览/设备/运行时/Skill/任务/进化/审计）`); failed = true; }
+if (navItems !== 6) { console.error(`FAIL: 导航项 ${navItems} 个，期望 6（总览/设备/运行时/Skill/进化/审计；任务页一期隐藏）`); failed = true; }
 
 if (!failed) {
   console.log(`console smoke OK: ${scripts.length} 个脚本按序执行，App 注册 ${navItems} 个页面`);

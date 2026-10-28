@@ -1,10 +1,13 @@
 // main.js：应用壳——页面注册、导航、登录流程。
 // 扩展方式：新页面 = 新建 js/pages/xxx.js 并 App.register('id','名称',render)（加载顺序在 main.js 之前）。
 (function () {
-  const pages = []; // {id, title, render(container)}
+  const pages = []; // {id, title, render(container), nav}
 
   window.App = {
-    register(id, title, render) { pages.push({ id, title, render }); },
+    // nav:false = 架构预留页（不经导航露出，hash 直达仍可用）
+    register(id, title, render, opts) {
+      pages.push({ id, title, render, nav: !opts || opts.nav !== false });
+    },
     go(id) {
       const p = pages.find(x => x.id === id);
       if (!p) return;
@@ -67,7 +70,7 @@
   window.addEventListener('DOMContentLoaded', () => {
     // 导航渲染
     const nav = document.getElementById('nav');
-    pages.forEach(p => {
+    pages.filter(p => p.nav).forEach(p => {
       const a = document.createElement('a');
       a.className = 'nav-item';
       a.dataset.id = p.id;
@@ -96,7 +99,7 @@
     // hash 单一事实源：导航点击只改 hash，路由统一由 hashchange 驱动（前进/后退可用）
     window.addEventListener('hashchange', () => {
       const target = (location.hash || '').replace('#', '');
-      if (pages.some(p => p.id === target)) App.go(target);
+      if (pages.some(p => p.id === target && p.nav)) App.go(target);
     });
 
     // 已有 token 直接进入；恢复 hash 定位的页面（N-10）
@@ -104,7 +107,8 @@
       tryLogin(API.token()).then(() => {
         enterApp();
         const target = (location.hash || '').replace('#', '');
-        App.go(pages.some(p => p.id === target) ? target : (pages[0] ? pages[0].id : 'report'));
+        const pg = pages.find(p => p.id === target && p.nav);
+        App.go(pg ? pg.id : (pages.find(p => p.nav) || pages[0]).id);
       }).catch(() => App.onAuthFailed());
     } else {
       App.onAuthFailed();

@@ -10,23 +10,40 @@
   }
 
   async function render(c) {
+    const devices = await API.get(`${API_}/devices`).catch(() => []);
+    const online = (devices || []).filter(d => d.status === 'online');
+
     c.innerHTML = `<div class="page-title">Skill</div>
-      <div class="card">
-        <div class="form-row">
-          <label>skill</label>
-          <select id="skill-name" style="min-width:200px"></select>
-          <button class="small" id="skill-refresh">刷新</button>
-          ${App.canWrite() ? `<button class="small primary" id="skill-evolve">生成改进候选（evolve）</button>` : ''}
-        </div>
-        <div id="evo-dialog" class="hidden">
-          <div class="form-row"><label>改进要求</label><input id="evo-instruction" style="flex:1" placeholder="如：补充错误处理说明"></div>
-          <div class="form-row"><label>父版本</label><input id="evo-parent" placeholder="默认最新 stable" style="width:140px">
-            <button class="small primary" id="evo-run">生成</button></div>
-          <div id="evo-out" class="muted"></div>
-        </div>
-        <div id="cov-summary" class="muted" style="margin-top:8px"></div>
+
+    <div class="card">
+      <h3>设备上的 skill（未收录）</h3>
+      <p class="muted">扫描在线设备，发现尚未在云端管理的 skill；导入云端后进入版本管理（审阅 → 发布）。</p>
+      ${App.canWrite() ? `
+      <div class="form-row">
+        <button id="scan-btn" class="primary">扫描在线设备（${online.length} 台）</button>
+        ${online.length ? `<select id="scan-dev"><option value="">全部在线设备</option>${online.map(d => `<option value="${d.id}">${App.esc(d.hostname)}</option>`).join('')}</select>` : ''}
       </div>
-      <div id="ver-view"><div class="card">加载中…</div></div>`;
+      <div id="scan-status" class="muted">点击扫描后，指令下发到各设备，由本地 worker 收集清单回传。</div>
+      <div id="scan-result" style="margin-top:12px"></div>`
+      : '<span class="muted">viewer 只读</span>'}
+    </div>
+
+    <div class="card">
+      <div class="form-row">
+        <label>skill</label>
+        <select id="skill-name" style="min-width:200px"></select>
+        <button class="small" id="skill-refresh">刷新</button>
+        ${App.canWrite() ? `<button class="small primary" id="skill-evolve">生成改进候选（evolve）</button>` : ''}
+      </div>
+      <div id="evo-dialog" class="hidden">
+        <div class="form-row"><label>改进要求</label><input id="evo-instruction" style="flex:1" placeholder="如：补充错误处理说明"></div>
+        <div class="form-row"><label>父版本</label><input id="evo-parent" placeholder="默认最新 stable" style="width:140px">
+          <button class="small primary" id="evo-run">生成</button></div>
+        <div id="evo-out" class="muted"></div>
+      </div>
+      <div id="cov-summary" class="muted" style="margin-top:8px"></div>
+    </div>
+    <div id="ver-view"><div class="card">加载中…</div></div>`;
 
     let skills = [];
     try {
@@ -36,7 +53,7 @@
       return;
     }
     const sel = document.getElementById('skill-name');
-    sel.innerHTML = skills.map(s => `<option>${App.esc(s.name)}</option>`).join('') || '<option disabled>暂无 skill（在「任务与操作」页点「扫描/获取」收集）</option>';
+    sel.innerHTML = skills.map(s => `<option>${App.esc(s.name)}</option>`).join('') || '<option disabled>暂无 skill（先在上方扫描设备收集）</option>';
     document.getElementById('skill-refresh').onclick = () => render(c);
     if (App.canWrite()) {
       document.getElementById('skill-evolve').onclick = () => {
@@ -59,6 +76,82 @@
         } catch (e) { out.textContent = e.message; App.toast(e.message, true); }
       };
     }
+
+    // ---- 设备上的 skill：扫描 → 聚合 → 导入（一期主流程）----
+    const scanBtn = document.getElementById('scan-btn');
+    if (scanBtn) {
+      const scanStatus = document.getElementById('scan-status');
+      const scanDev = document.getElementById('scan-dev');
+      scanBtn.onclick = async () => {
+        scanBtn.disabled = true;
+        const targets = scanDev && scanDev.value ? [scanDev.value] : online.map(d => d.id);
+        if (!targets.length) { scanBtn.disabled = false; return; }
+        scanStatus.textContent = '扫描中（' + targets.length + ' 台设备）：指令已下发，等待本地 worker 回传清单…';
+        try {
+          const results = await Promise.all(targets.map(dev =>
+            API.post(`${API_}/commands`, { device_id: dev, cmd_type: 'skills.scan', payload: {}, ttl_seconds: 120 })
+              .then(r0 => API.pollCmd(r0.cmd_id, 60000).then(r => ({ dev, r })))
+              .catch(() => ({ dev, r: null }))
+          ));
+          const agg = {};
+          for (const { dev, r } of results) {
+            if (!r || !r.ok) continue;
+            for (const m of (r.data.manifests || [])) {
+              const k = m.name + '@' + m.version;
+              if (!agg[k]) agg[k] = { name: m.name, version: m.version, summary: m.summary || '',
+                devices: [], registered: !!m.registered };
+              agg[k].devices.push(dev);
+              if (m.registered) agg[k].registered = true;
+            }
+          }
+          renderScan(agg);
+        } finally {
+          scanBtn.disabled = false;
+        }
+      };
+    }
+
+    function renderScan(agg) {
+      const el = document.getElementById('scan-result');
+      const keys = Object.keys(agg);
+      if (!keys.length) { el.innerHTML = '<span class="muted">在线设备上没有发现 skill</span>'; return; }
+      el.innerHTML = `<table>
+        <tr><th>名称</th><th>版本</th><th>摘要</th><th>所在设备</th><th>云端状态</th><th>操作</th></tr>
+        ${keys.map(k => {
+          const a = agg[k];
+          const reg = a.registered;
+          return `<tr>
+            <td><b>${App.esc(a.name)}</b></td><td>v${App.esc(a.version)}</td>
+            <td>${App.esc(a.summary)}</td>
+            <td>${a.devices.length} 台</td>
+            <td>${reg ? '<span class="badge blue">已登记</span>' : '<span class="badge yellow">未收录</span>'}</td>
+            <td>${App.canWrite() && !reg ? `<button class="small primary" data-imp="${App.esc(k)}">导入</button>` : '—'}</td>
+          </tr>`;
+        }).join('')}
+      </table>`;
+      el.querySelectorAll('[data-imp]').forEach(b => {
+        b.onclick = async () => {
+          const k = b.dataset.imp;
+          const a = (scanAgg || agg)[k];
+          b.disabled = true;
+          b.textContent = '导入中…';
+          try {
+            const r0 = await API.post(`${API_}/commands`, { device_id: a.devices[0],
+              cmd_type: 'skills.collect', payload: { name: a.name }, ttl_seconds: 120 });
+            const r = await API.pollCmd(r0.cmd_id, 60000);
+            if (!r.ok) { App.toast('导入失败：' + r.error, true); b.disabled = false; b.textContent = '导入'; return; }
+            const ing = r.envelope.ingest || '';
+            b.textContent = ing === 'unchanged' ? '内容无变化' : '✅ 已导入';
+            App.toast(a.name + ' 已导入云端（去下方时间线审阅发布）');
+            loadVersions(sel.value);
+          } catch (e) { App.toast(e.message, true); b.disabled = false; b.textContent = '导入'; }
+        };
+      });
+    }
+    // 全局聚合供导入使用
+    let scanAgg = {};
+    const origRenderScan = renderScan;
+    renderScan = function(agg) { scanAgg = agg; origRenderScan(agg); };
 
     sel.onchange = () => loadVersions(sel.value);
     // 深链接预填：任务页「去 Skill 页审阅 X」

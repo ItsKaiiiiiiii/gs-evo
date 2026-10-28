@@ -336,9 +336,11 @@
     }
   }
 
+  // 一期目标为 skill 收集：任务下发（自定义 prompt）为架构预留，
+  // 不经导航露出（hash #tasks 直达仍可用）。未来扩展时恢复 nav 注册即可。
   App.register('tasks', '任务与操作', (c) => {
     timers.splice(0).forEach(fn => fn());
     expandedTask = null;
     return render(c);
-  });
+  }, { nav: false });
 })();
