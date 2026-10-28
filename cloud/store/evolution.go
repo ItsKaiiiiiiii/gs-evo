@@ -245,7 +245,7 @@ func (s *Store) GetClientRelease(version, osName, arch string) (*ClientReleaseRo
 // ---- RBAC：admin token 角色 ----
 
 type AdminTokenRow struct {
-	TokenHash string    `json:"-"` // 不外露
+	Seq       int64     `json:"seq"`
 	Label     string    `json:"label"`
 	Role      string    `json:"role"` // admin | viewer
 	CreatedAt time.Time `json:"created_at"`
@@ -297,18 +297,24 @@ func (s *Store) ListRecentEvaluationRuns(limit int) ([]*EvaluationRunRow, error)
 
 // ListAdminTokens token 清单（审计页；哈希不外露）。
 func (s *Store) ListAdminTokens() ([]AdminTokenRow, error) {
-	rows, err := s.DB.Query(`SELECT label, role, created_at FROM admin_token ORDER BY created_at`)
+	rows, err := s.DB.Query(`SELECT seq, label, role, created_at FROM admin_token ORDER BY seq`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []AdminTokenRow{}
 	for rows.Next() {
-		var t AdminTokenRow
-		if err := rows.Scan(&t.Label, &t.Role, &t.CreatedAt); err != nil {
+		t := AdminTokenRow{}
+		if err := rows.Scan(&t.Seq, &t.Label, &t.Role, &t.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
 	}
 	return out, rows.Err()
+}
+
+// RevokeAdminTokenBySeq 吊销管理 token。
+func (s *Store) RevokeAdminTokenBySeq(seq int64) error {
+	_, err := s.DB.Exec(`DELETE FROM admin_token WHERE seq=?`, seq)
+	return err
 }

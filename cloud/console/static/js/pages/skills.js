@@ -142,8 +142,9 @@
             if (!r.ok) { App.toast('导入失败：' + r.error, true); b.disabled = false; b.textContent = '导入'; return; }
             const ing = r.envelope.ingest || '';
             b.textContent = ing === 'unchanged' ? '内容无变化' : '✅ 已导入';
-            App.toast(a.name + ' 已导入云端（去下方时间线审阅发布）');
-            loadVersions(sel.value);
+            // 把新导入的 skill 加入下拉并选中，直接进入版本时间线（修复 P0-1 断点）
+            await refreshSkillList(a.name);
+            App.toast(a.name + ' 已导入云端，已进入版本管理');
           } catch (e) { App.toast(e.message, true); b.disabled = false; b.textContent = '导入'; }
         };
       });
@@ -152,6 +153,21 @@
     let scanAgg = {};
     const origRenderScan = renderScan;
     renderScan = function(agg) { scanAgg = agg; origRenderScan(agg); };
+
+    // 重拉 skill 列表并选中目标（导入完成后的闭环）
+    async function refreshSkillList(selectName) {
+      const skills = await API.get(`${API_}/skills`);
+      sel.innerHTML = skills.map(s => `<option>${App.esc(s.name)}</option>`).join('');
+      if (selectName) {
+        sel.value = selectName;
+        if (sel.value !== selectName) { // 列表没有则补一个
+          sel.insertAdjacentHTML('beforeend', `<option>${App.esc(selectName)}</option>`);
+          sel.value = selectName;
+        }
+      }
+      await loadVersions(sel.value);
+    }
+    window.__refreshSkillList = refreshSkillList;
 
     sel.onchange = () => loadVersions(sel.value);
     // 深链接预填：任务页「去 Skill 页审阅 X」
@@ -168,7 +184,12 @@
 
   async function loadVersions(name) {
     const view = document.getElementById('ver-view');
+    if (!name) {
+      view.innerHTML = '<div class="card"><span class="muted">先选择 skill</span></div>';
+      return;
+    }
     view.innerHTML = '<div class="card">加载中…</div>';
+    try {
     const [vers, cov, policy] = await Promise.all([
       API.get(`${API_}/skills/${name}/versions`),
       API.get(`${API_}/skills/${name}/coverage`).catch(() => []),
@@ -215,6 +236,9 @@
       document.getElementById('policy-detail').innerHTML = `<pre>${App.esc(JSON.stringify(policy, null, 2))}</pre>
       <p class="muted">修改：gs-cloud policy --name ${App.esc(name)} --enable --min-pass-rate R --min-runs N --target-root R [--label L]</p>`;
     };
+    } catch (e) {
+      verView.innerHTML = `<div class="card"><span class="err">加载失败：${App.esc(e.message)}</span> <button class="small" onclick="App.go('skills')">重试</button></div>`;
+    }
 
     verView.querySelectorAll('button[data-act]').forEach(b => {
       b.onclick = async () => {

@@ -11,7 +11,7 @@ const (
 
 // 指令类型（P5 运行时）
 const CmdRuntimeRegister = "runtime.register" // 创建运行时（绑定目标设备）
-const CmdRuntimeRemove  = "runtime.remove"  // 删除运行时（生命周期管理） // 云端要求 worker 登记一个运行时（受审计的"创建"入口）
+const CmdRuntimeRemove = "runtime.remove"     // 删除运行时（生命周期管理） // 云端要求 worker 登记一个运行时（受审计的"创建"入口）
 
 // 事件 kind（内部事件流 → 线上 kind 的映射见 AGENT-PROTOCOL.md §7）。
 const (

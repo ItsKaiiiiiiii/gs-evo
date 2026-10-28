@@ -162,6 +162,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/admin/client-update/rollout", s.authAdmin(s.handleClientUpdateRollout))
 	mux.HandleFunc("GET /api/v1/admin/report/summary", s.authAny(s.handleReport))
 	mux.HandleFunc("POST /api/v1/admin/tokens", s.authAdmin(s.handleCreateAdminToken))
+	mux.HandleFunc("POST /api/v1/admin/tokens/revoke", s.authAdmin(s.handleRevokeAdminToken))
 	mux.HandleFunc("POST /api/v1/admin/maintenance", s.authAdmin(s.handleMaintenance))
 
 	// 任务面（P2）
@@ -175,6 +176,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/admin/devices/{id}/runtimes", s.authAny(s.handleDeviceRuntimes))
 	mux.HandleFunc("GET /api/v1/admin/runtimes", s.authAny(s.handleListRuntimes))
 	mux.HandleFunc("GET /api/v1/admin/runtime-types", s.authAny(s.handleRuntimeTypes))
+	mux.HandleFunc("GET /api/v1/admin/whoami", s.authAny(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"role": s.verifier.VerifyAdminRole(r.Context(), r.Header.Get("Authorization"))})
+	}))
 	mux.HandleFunc("GET /api/v1/admin/skills/{name}/coverage", s.authAny(s.handleSkillCoverage))
 	mux.HandleFunc("GET /api/v1/admin/evaluations", s.authAny(s.handleRecentEvaluations))
 	mux.HandleFunc("GET /api/v1/admin/tokens", s.authAny(s.handleListTokens))

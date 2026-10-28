@@ -444,3 +444,19 @@ func sha256SumHex(b []byte) string {
 	h.Write(b)
 	return hex.EncodeToString(h.Sum(nil))
 }
+
+// handleRevokeAdminToken 吊销管理 token（生命周期管理；按 seq 精确定位）。
+func (s *Server) handleRevokeAdminToken(w http.ResponseWriter, r *http.Request) {
+	req, err := readBody[struct {
+		Seq int64 `json:"seq"`
+	}](r)
+	if err != nil || req.Seq <= 0 {
+		writeErr(w, http.StatusBadRequest, "seq required")
+		return
+	}
+	if err := s.st.RevokeAdminTokenBySeq(req.Seq); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"revoked": req.Seq})
+}

@@ -18,6 +18,7 @@ type Device struct {
 	Arch            string
 	WorkerVersion   string
 	Labels          []string
+	Roots           []string
 	NextCmdSeq      int64
 	LastAckedCmdSeq int64
 	LastSeen        *time.Time
@@ -61,18 +62,21 @@ func (s *Store) UpsertDeviceOnEnroll(tx *sql.Tx, d *Device) (isNew bool, err err
 }
 
 const deviceCols = `id, owner, token_hash, token_expires_at, hostname, os, arch, worker_version,
-	labels, next_cmd_seq, last_acked_cmd_seq, last_seen, status, created_at`
+	labels, roots, next_cmd_seq, last_acked_cmd_seq, last_seen, status, created_at`
 
 func scanDevice(row interface{ Scan(...any) error }) (*Device, error) {
 	var d Device
-	var labelsRaw []byte
+	var labelsRaw, rootsRaw []byte
 	var lastSeen sql.NullTime
 	if err := row.Scan(&d.ID, &d.Owner, &d.TokenHash, &d.TokenExpiresAt, &d.Hostname, &d.OS, &d.Arch,
-		&d.WorkerVersion, &labelsRaw, &d.NextCmdSeq, &d.LastAckedCmdSeq, &lastSeen, &d.Status, &d.CreatedAt); err != nil {
+		&d.WorkerVersion, &labelsRaw, &rootsRaw, &d.NextCmdSeq, &d.LastAckedCmdSeq, &lastSeen, &d.Status, &d.CreatedAt); err != nil {
 		return nil, err
 	}
 	if len(labelsRaw) > 0 {
 		_ = json.Unmarshal(labelsRaw, &d.Labels)
+	}
+	if len(rootsRaw) > 0 {
+		_ = json.Unmarshal(rootsRaw, &d.Roots)
 	}
 	if lastSeen.Valid {
 		d.LastSeen = &lastSeen.Time
@@ -115,6 +119,16 @@ func (s *Store) ListDevices() ([]*Device, error) {
 	return out, rows.Err()
 }
 
+// SetDeviceRoots 设备白名单根目录（hello 上报，安装目标下拉数据源）。
+func (s *Store) SetDeviceRoots(id string, roots []string) error {
+	b, err := json.Marshal(roots)
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.Exec(`UPDATE device SET roots=? WHERE id=?`, string(b), id)
+	return err
+}
+
 // SetDeviceLabels 设置设备标签（rollout 圈定）。
 func (s *Store) SetDeviceLabels(id string, labels []string) error {
 	b, err := json.Marshal(labels)
@@ -152,10 +166,10 @@ func (s *Store) SetOffline(id string) error {
 	return err
 }
 
-// UpdateRuntime hello 上报的运行时档案。
-func (s *Store) UpdateRuntime(id string, hostname, osName, arch, version string, agentsJSON []byte) error {
-	_, err := s.DB.Exec(`UPDATE device SET hostname=?, os=?, arch=?, worker_version=?, agents=? WHERE id=?`,
-		hostname, osName, arch, version, agentsJSON, id)
+// UpdateRuntime hello 上报的运行时档案（含白名单 roots，安装目标下拉数据源）。
+func (s *Store) UpdateRuntimeFull(id string, hostname, osName, arch, version string, agentsJSON, rootsJSON []byte) error {
+	_, err := s.DB.Exec(`UPDATE device SET hostname=?, os=?, arch=?, worker_version=?, agents=?, roots=? WHERE id=?`,
+		hostname, osName, arch, version, agentsJSON, rootsJSON, id)
 	return err
 }
 

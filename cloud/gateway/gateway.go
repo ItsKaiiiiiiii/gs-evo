@@ -176,7 +176,8 @@ func (g *Gateway) handleHello(c *conn, raw []byte) {
 	var h proto.Hello
 	if err := json.Unmarshal(raw, &h); err == nil {
 		agentsJSON, _ := json.Marshal(h.Agents)
-		_ = g.store.UpdateRuntime(c.deviceID, h.Device.Hostname, h.Device.OS, h.Device.Arch, h.Device.WorkerVersion, agentsJSON)
+		rootsJSON, _ := json.Marshal(h.Roots)
+		_ = g.store.UpdateRuntimeFull(c.deviceID, h.Device.Hostname, h.Device.OS, h.Device.Arch, h.Device.WorkerVersion, agentsJSON, rootsJSON)
 		g.log.Info("hello runtimes received", "device", c.deviceID, "count", len(h.Runtimes))
 		for _, rt := range h.Runtimes {
 			source := rt.Source

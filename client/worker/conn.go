@@ -397,6 +397,9 @@ func (e *Engine) buildHello() (*proto.Hello, error) {
 		LastAckedCmdSeq: e.State.MaxSeq,
 	}
 	h.Agents = e.ProbeAgents(context.Background())
+	for _, r := range e.expandRoots(nil) {
+		h.Roots = append(h.Roots, r)
+	}
 	for _, rt := range e.buildRuntimes(context.Background()) {
 		h.Runtimes = append(h.Runtimes, proto.RuntimeInfo{
 			RuntimeID: rt.RuntimeID, Type: rt.Type, Version: rt.Version,

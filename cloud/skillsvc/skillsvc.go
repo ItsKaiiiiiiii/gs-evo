@@ -13,6 +13,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 
 	"github.com/ItsKaiiiiiiii/gs-evo/cloud/store"
 	"github.com/ItsKaiiiiiiii/gs-evo/pkg/proto"
@@ -33,10 +35,12 @@ var ErrBadTransition = errors.New("invalid status transition (valid chain: draft
 var ErrNotStable = errors.New("version is not stable: only reviewed+stable versions (signed by the cloud) can be installed; run `gs-cloud skill set-status --name N --version V --status stable` first")
 
 type Service struct {
-	st        *store.Store
-	log       *slog.Logger
-	bundleDir string // 内容寻址存储根
-	privHex   string // ed25519 私钥（stable 签名用）
+	st          *store.Store
+	log         *slog.Logger
+	bundleDir   string           // 内容寻址存储根
+	privHex     string           // ed25519 私钥（stable 签名用）
+	mu          sync.Mutex       // 保护 lastSkipped
+	lastSkipped []map[string]any // 最近一次下发中被跳过的设备（前端展示"为什么没发给它"）
 
 	// CmdIssuer 创建指令并尝试投递（api 装配层注入，避免环形依赖）。
 	CmdIssuer func(ctx context.Context, deviceID, cmdType string, payload map[string]any, createdBy string) (*store.Command, error)
@@ -227,7 +231,16 @@ func (s *Service) CreateInstallCommands(ctx context.Context, skillName, version,
 		return nil, fmt.Errorf("no matching devices")
 	}
 	var cmds []*store.Command
+	skipped := []map[string]any{}
 	for _, dev := range targets {
+		// 前置校验：已知白名单 roots 时，目标根不匹配的设备直接跳过（不发必败指令）
+		if len(dev.Roots) > 0 && !rootsContain(dev.Roots, targetRoot) {
+			skipped = append(skipped, map[string]any{
+				"device_id": dev.ID,
+				"reason":    "target_root 不在该设备白名单内（已知 roots: " + strings.Join(dev.Roots, ", ") + "）",
+			})
+			continue
+		}
 		url, err := s.TicketURL(ctx, dev.ID, v.ContentSHA256)
 		if err != nil {
 			return nil, err
@@ -246,7 +259,26 @@ func (s *Service) CreateInstallCommands(ctx context.Context, skillName, version,
 		}
 		cmds = append(cmds, cmd)
 	}
+	s.mu.Lock()
+	s.lastSkipped = skipped
+	s.mu.Unlock()
 	return cmds, nil
+}
+
+// LastSkipped 最近一次下发中跳过的设备与原因（控制台展示）。
+func (s *Service) LastSkipped() []map[string]any { return s.lastSkipped }
+
+// rootsContain 目标根是否在该设备已知白名单内（roots 未知时不拦截，worker 侧兜底）。
+func rootsContain(roots []string, target string) bool {
+	if len(roots) == 0 {
+		return true // roots 未知：交由 worker 侧兜底校验
+	}
+	for _, r := range roots {
+		if target == r || strings.HasPrefix(target, r+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // OnInstallResult 安装结果回传：落 DeviceSkillInstall（§8）。
