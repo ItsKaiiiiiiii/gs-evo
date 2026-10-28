@@ -113,13 +113,13 @@
         ${App.canWrite() ? `
         <div class="form-row">
           <button class="small primary" id="rt-add">添加运行时（绑定本机）</button>
-          <span class="muted">云端下发 runtime.register 指令，本机校验二进制并探测版本后登记</span>
+          <span class="muted">常见 agent（claude-code 等）已自动发现，无需添加——此处用于登记自定义二进制。填二进制名即会在设备 PATH 中查找；不知道路径时在设备终端执行 which <名> 查看</span>
         </div>
         <div id="rt-form" class="hidden">
           <div class="form-row">
             <label>类型</label>
             <select id="rt-type"><option value="gsagent">gsagent（自定义二进制，gsagent 协议）</option><option value="claude-code">claude-code</option></select>
-            <label>路径</label><input id="rt-path" style="flex:1" placeholder="设备上的二进制绝对路径，如 /usr/local/bin/my-agent">
+            <label>路径</label><input id="rt-path" style="flex:1" placeholder="二进制名（在设备 PATH 中查找）或绝对路径">
           </div>
           <div class="form-row">
             <label>参数</label><input id="rt-args" style="flex:1" placeholder="启动参数，逗号分隔（可选）">

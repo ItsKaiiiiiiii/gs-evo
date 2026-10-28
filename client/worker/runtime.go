@@ -16,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-
 	"github.com/ItsKaiiiiiiii/gs-evo/pkg/proto"
 )
 
@@ -142,7 +141,16 @@ func (e *Engine) handleRuntimeRegister(ctx context.Context, payload map[string]a
 		return nil, errors.New(`bad runtime.register payload: 需要 {"type":"gsagent|claude-code","path":"...","args":[...],"env":{...}}`)
 	}
 	if p.Path == "" {
-		return nil, errors.New("path required（运行时二进制必须显式指定）")
+		return nil, errors.New("path required（填二进制名或绝对路径）")
+	}
+	// 路径解析：填绝对路径用之；只填二进制名 → 在设备 PATH 中查找（用户无需知道绝对路径）
+	p.Path = strings.TrimSpace(p.Path)
+	if !strings.ContainsAny(p.Path, "/\\") {
+		resolved, err := exec.LookPath(p.Path)
+		if err != nil {
+			return nil, fmt.Errorf("在设备 PATH 中找不到 %q——确认已安装，或在设备上执行 which %s 查看绝对路径", p.Path, p.Path)
+		}
+		p.Path = resolved
 	}
 	if _, err := os.Stat(p.Path); err != nil {
 		return nil, fmt.Errorf("path 不存在或不可访问: %s", p.Path)
