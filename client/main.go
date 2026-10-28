@@ -61,6 +61,14 @@ func main() {
 		err = cmdProbe(home)
 	case "autostart":
 		err = cmdAutostart(home, args[1:])
+	case "pause":
+		err = worker.SetPaused(home, true)
+		fmt.Println("已暂停：云端指令不再执行（心跳保持）。恢复：gs-worker resume")
+	case "resume":
+		err = worker.SetPaused(home, false)
+		fmt.Println("已恢复：正常执行云端指令")
+	case "history":
+		err = cmdHistory(home, args[1:])
 	default:
 		usage()
 		os.Exit(2)
@@ -88,6 +96,8 @@ commands:
   autostart enable|disable|status
                                注册/注销开机自启（systemd/LaunchAgent/计划任务；
                                升级自动生效与崩溃拉起都依赖它）
+  pause | resume               暂停/恢复云端指令执行（心跳保持，本机留痕）
+  history                      查看本地审计日志（云端对本机做过的每件事）
 `)
 }
 
@@ -103,6 +113,23 @@ func cmdLogin(home worker.Home, args []string) error {
 	root := fs.String("skills-root", worker.EnvOr("GS_WORKER_SKILLS_ROOT", worker.DefaultSkillsRoot()), "skill 白名单目录")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	// 信任包：接入前明示数据边界，要求确认（--yes 跳过）
+	yes := fs.Bool("yes", false, "跳过数据边界确认（自动化场景）")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !*yes {
+		fmt.Println(`接入前请确认数据边界：
+  1. 本机 ` + *root + ` 白名单目录下的 skill 文件会被同步到云端
+  2. 管理员可远程下发任务，本机 agent 将执行并回传过程与结果
+  3. 所有云端操作在本机 audit.log 留痕，可随时 gs-worker pause 暂停、logout 退出`)
+		fmt.Print("确认接入？[y/N] ")
+		var ans string
+		fmt.Scanln(&ans)
+		if !strings.EqualFold(strings.TrimSpace(ans), "y") {
+			return fmt.Errorf("已取消接入")
+		}
 	}
 	var tok string
 	useEnroll := false
@@ -273,6 +300,25 @@ func cmdAutostart(home worker.Home, args []string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown autostart subcommand %q", args[0])
+}
+
+// cmdHistory 查看本地审计日志（机器侧知情权）。
+func cmdHistory(home worker.Home, args []string) error {
+	fs := flag.NewFlagSet("history", flag.ExitOnError)
+	n := fs.Int("n", 50, "显示最近 N 条")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(home.AuditLogPath())
+	if err != nil {
+		fmt.Println("（暂无本地审计记录——云端对本机的操作会记录在这里）")
+		return nil
+	}
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	for _, l := range lines[max(0, len(lines)-*n):] {
+		fmt.Println(l)
+	}
+	return nil
 }
 
 func cmdProbe(home worker.Home) error {

@@ -264,6 +264,13 @@ func (e *Engine) dispatch(ws *websocket.Conn, cmd *proto.Cmd) {
 		return
 	}
 
+	// 信任包：暂停期间拒绝动作类指令（task.cancel 保留——允许叫停已在跑的任务）
+	if e.isPaused() && cmd.CmdType != proto.CmdTaskCancel {
+		e.sendResult(ws, &proto.CmdResult{Type: proto.TypeCmdResult, CmdID: cmd.CmdID, CmdSeq: cmd.CmdSeq,
+			OK: false, Error: "设备已暂停（本机执行过 gs-worker pause）；如需恢复请在设备上运行 gs-worker resume"})
+		return
+	}
+
 	handler := e.handlers[cmd.CmdType]
 	if handler == nil {
 		e.sendResult(ws, &proto.CmdResult{Type: proto.TypeCmdResult, CmdID: cmd.CmdID, CmdSeq: cmd.CmdSeq,
@@ -400,6 +407,7 @@ func (e *Engine) buildHello() (*proto.Hello, error) {
 	for _, r := range e.expandRoots(nil) {
 		h.Roots = append(h.Roots, r)
 	}
+	h.Paused = e.isPaused()
 	for _, rt := range e.buildRuntimes(context.Background()) {
 		h.Runtimes = append(h.Runtimes, proto.RuntimeInfo{
 			RuntimeID: rt.RuntimeID, Type: rt.Type, Version: rt.Version,

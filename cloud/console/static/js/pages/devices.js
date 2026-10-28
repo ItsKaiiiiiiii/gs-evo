@@ -16,14 +16,14 @@
       <td><b>${App.esc(d.hostname)}</b></td>
       <td>${App.esc(d.os)}/${App.esc(d.arch)}</td>
       <td>${App.esc(d.worker_version || '-')}</td>
-      <td>${badge(d.status)}</td>
+      <td>${badge(d.status)}${d.paused ? ' <span class="badge yellow">已暂停</span>' : ''}</td>
       <td>${(d.labels || []).map(l => `<span class="badge blue">${App.esc(l)}</span>`).join(' ')}</td>
       <td>${App.fmtTime(d.last_seen)}</td>
       <td>
-        ${App.canWrite() ? `
+        ${App.canWrite() && !d.paused && d.status !== 'revoked' ? `
         <button class="small" data-act="disconnect" data-id="${d.id}" data-host="${App.esc(d.hostname)}">断连</button>
-        <button class="small danger" data-act="revoke" data-id="${d.id}" data-host="${App.esc(d.hostname)}" ${d.status === 'revoked' ? 'disabled' : ''}>吊销</button>
-        <button class="small" data-act="label" data-id="${d.id}" data-host="${App.esc(d.hostname)}" data-labels="${App.esc((d.labels || []).join(','))}">标签</button>` : ''}
+        <button class="small danger" data-act="revoke" data-id="${d.id}" data-host="${App.esc(d.hostname)}">吊销</button>
+        <button class="small" data-act="label" data-id="${d.id}" data-host="${App.esc(d.hostname)}" data-labels="${App.esc((d.labels || []).join(','))}">标签</button>` : '<span class="muted">—</span>'}
       </td>
     </tr>`).join('');
 

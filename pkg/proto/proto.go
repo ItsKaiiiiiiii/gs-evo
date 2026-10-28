@@ -102,6 +102,7 @@ type Hello struct {
 	Agents          []AgentInfo   `json:"agents"`   // 兼容字段（旧云端）；新云端读 Runtimes
 	Runtimes        []RuntimeInfo `json:"runtimes"` // 运行时一等实体（D14）
 	Roots           []string      `json:"roots"`    // skill 白名单根目录（安装目标下拉数据源）
+	Paused          bool          `json:"paused"`   // 机器侧暂停（信任包 D15）
 	Skills          []SkillBrief  `json:"skills"`
 	LastAckedCmdSeq int64         `json:"last_acked_cmd_seq"`
 	Capabilities    []string      `json:"capabilities"`

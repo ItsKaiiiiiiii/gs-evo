@@ -783,6 +783,7 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 		Arch          string   `json:"arch"`
 		WorkerVersion string   `json:"worker_version"`
 		Status        string   `json:"status"`
+		Paused        bool     `json:"paused"`
 		LastSeen      string   `json:"last_seen,omitempty"`
 		LastAcked     int64    `json:"last_acked_cmd_seq"`
 		Labels        []string `json:"labels"`
@@ -794,7 +795,8 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 			labels = []string{}
 		}
 		v := devView{ID: d.ID, Hostname: d.Hostname, OS: d.OS, Arch: d.Arch,
-			WorkerVersion: d.WorkerVersion, Status: d.Status, LastAcked: d.LastAckedCmdSeq, Labels: labels}
+			WorkerVersion: d.WorkerVersion, Status: d.Status, Paused: d.Paused,
+			LastAcked: d.LastAckedCmdSeq, Labels: labels}
 		if d.LastSeen != nil {
 			v.LastSeen = d.LastSeen.UTC().Format(time.RFC3339)
 		}

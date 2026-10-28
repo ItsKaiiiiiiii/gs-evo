@@ -184,3 +184,5 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 }
 
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }
+
+func (h Home) AuditLogPath() string { return filepath.Join(h.Dir, "audit.log") }

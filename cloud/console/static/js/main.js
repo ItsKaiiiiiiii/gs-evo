@@ -55,16 +55,15 @@
   function enterApp() {
     document.getElementById('login-mask').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
-    // 探测角色：尝试一个写端点（无副作用的签名校验路径不存在，用 tokens 端点 403 判 viewer）
-    fetch('/api/v1/admin/enroll-tokens', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + API.token(), 'Content-Type': 'application/json' },
-      body: '{}',
-    }).then(r => {
-      App.role = (r.status === 403) ? 'viewer' : 'admin';
-      document.getElementById('role-badge').textContent = App.role;
-      document.getElementById('role-badge').className = 'badge ' + (App.role === 'admin' ? 'green' : 'yellow');
-    }).catch(() => { document.getElementById('role-badge').textContent = '?'; });
+    // 探测角色：whoami（无副作用）
+    fetch('/api/v1/admin/whoami', { headers: { 'Authorization': 'Bearer ' + API.token() } })
+      .then(r => r.json())
+      .then(r => {
+        App.role = r.role || 'viewer';
+        document.getElementById('role-badge').textContent = App.role;
+        document.getElementById('role-badge').className = 'badge ' + (App.role === 'admin' ? 'green' : 'yellow');
+      })
+      .catch(() => { document.getElementById('role-badge').textContent = '?'; });
   }
 
   window.addEventListener('DOMContentLoaded', () => {

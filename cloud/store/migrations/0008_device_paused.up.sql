@@ -1,0 +1,2 @@
+-- 机器侧暂停状态云端可视（信任包 D15）
+ALTER TABLE device ADD COLUMN paused BOOLEAN NOT NULL DEFAULT FALSE;

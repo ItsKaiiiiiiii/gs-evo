@@ -139,6 +139,7 @@ func (e *Engine) handleCollect(ctx context.Context, payload map[string]any) (map
 	}
 
 	out := proto.CollectResult{Name: p.Name, ContentHash: "sha256:" + sha, Size: size}
+	e.audit("SKILL_COLLECT", p.Name+" v"+out.Version+" 打包上传 "+fmt.Sprintf("%d", size)+"B")
 	// manifest 里的版本随包一起走（云端以 manifest.version 入库）
 	if m, err := skillLoadManifest(dir, root, e.installedHashes()); err == nil {
 		out.Version = m.Version
@@ -235,6 +236,7 @@ func (e *Engine) handleInstall(ctx context.Context, payload map[string]any) (map
 		}
 		if expected != "" && actualDirHash != expected && p.OnConflict != "overwrite" {
 			ir.Result = "conflict_skipped"
+			e.audit("SKILL_SKIP", p.Name+" v"+p.Version+"：本地有改动，按策略跳过")
 			data, _ := structToMap(ir)
 			return data, nil // 默认 skip_and_report，不静默覆盖
 		}
@@ -283,6 +285,7 @@ func (e *Engine) handleInstall(ctx context.Context, payload map[string]any) (map
 	ir.Result = "installed"
 	ir.Installed = p.Version
 	ir.Replaced = prev
+	e.audit("SKILL_INSTALL", p.Name+" v"+p.Version+" <- 云端下发（替换 "+prev+"）")
 	// 6. 回写 state.json：content_hash 记录【解压后目录内容哈希】
 	//    （冲突检测比对的是磁盘目录，二者必须同源；bundle sha 仅用于传输校验）
 	dirHash, herr := skillHashDir(target)

@@ -19,6 +19,7 @@ type Device struct {
 	WorkerVersion   string
 	Labels          []string
 	Roots           []string
+	Paused          bool
 	NextCmdSeq      int64
 	LastAckedCmdSeq int64
 	LastSeen        *time.Time
@@ -62,14 +63,14 @@ func (s *Store) UpsertDeviceOnEnroll(tx *sql.Tx, d *Device) (isNew bool, err err
 }
 
 const deviceCols = `id, owner, token_hash, token_expires_at, hostname, os, arch, worker_version,
-	labels, roots, next_cmd_seq, last_acked_cmd_seq, last_seen, status, created_at`
+	labels, roots, paused, next_cmd_seq, last_acked_cmd_seq, last_seen, status, created_at`
 
 func scanDevice(row interface{ Scan(...any) error }) (*Device, error) {
 	var d Device
 	var labelsRaw, rootsRaw []byte
 	var lastSeen sql.NullTime
 	if err := row.Scan(&d.ID, &d.Owner, &d.TokenHash, &d.TokenExpiresAt, &d.Hostname, &d.OS, &d.Arch,
-		&d.WorkerVersion, &labelsRaw, &rootsRaw, &d.NextCmdSeq, &d.LastAckedCmdSeq, &lastSeen, &d.Status, &d.CreatedAt); err != nil {
+		&d.WorkerVersion, &labelsRaw, &rootsRaw, &d.Paused, &d.NextCmdSeq, &d.LastAckedCmdSeq, &lastSeen, &d.Status, &d.CreatedAt); err != nil {
 		return nil, err
 	}
 	if len(labelsRaw) > 0 {
@@ -167,9 +168,9 @@ func (s *Store) SetOffline(id string) error {
 }
 
 // UpdateRuntime hello 上报的运行时档案（含白名单 roots，安装目标下拉数据源）。
-func (s *Store) UpdateRuntimeFull(id string, hostname, osName, arch, version string, agentsJSON, rootsJSON []byte) error {
-	_, err := s.DB.Exec(`UPDATE device SET hostname=?, os=?, arch=?, worker_version=?, agents=?, roots=? WHERE id=?`,
-		hostname, osName, arch, version, agentsJSON, rootsJSON, id)
+func (s *Store) UpdateRuntimeFull(id string, hostname, osName, arch, version string, agentsJSON, rootsJSON []byte, paused bool) error {
+	_, err := s.DB.Exec(`UPDATE device SET hostname=?, os=?, arch=?, worker_version=?, agents=?, roots=?, paused=? WHERE id=?`,
+		hostname, osName, arch, version, agentsJSON, rootsJSON, paused, id)
 	return err
 }
 

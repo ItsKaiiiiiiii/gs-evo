@@ -319,6 +319,7 @@ func (e *Engine) handleTaskStart(ctx context.Context, payload map[string]any) (m
 		TaskID: p.TaskID, RuntimeID: p.RuntimeID, Status: finalStatus, Exit: exitCode,
 		DurationMs: duration.Milliseconds(), Summary: summary,
 	}
+	e.audit("TASK", p.TaskID+" "+finalStatus+" exit="+fmt.Sprint(exitCode)+" prompt="+p.Prompt)
 	data, _ := structToMap(tr)
 	return data, nil
 }
