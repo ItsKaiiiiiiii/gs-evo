@@ -46,6 +46,7 @@ type Engine struct {
 	mu          sync.Mutex     // 保护 State / tasks / currentConn
 	tasks       map[string]*activeTask
 	currentConn *websocket.Conn
+	wsMu        sync.Mutex               // ws 单写者锁：gorilla 禁止并发写
 	inflight    map[string]chan struct{} // 执行中的 cmd_id（防同毫秒重复投递双跑）
 }
 
@@ -163,9 +164,8 @@ func (e *Engine) serveOnce(ctx context.Context) (bool, error) {
 		for {
 			select {
 			case <-t.C:
-				_ = ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				b, _ := json.Marshal(&proto.Ping{Type: proto.TypePing, TS: time.Now()})
-				if werr := ws.WriteMessage(websocket.TextMessage, b); werr != nil {
+				if werr := e.writeWS(ws, b); werr != nil {
 					_ = ws.Close()
 					return
 				}
@@ -270,17 +270,19 @@ func (e *Engine) dispatch(ws *websocket.Conn, cmd *proto.Cmd) {
 		return
 	}
 
-	select {
-	case e.sem <- struct{}{}:
-	case <-time.After(10 * time.Minute):
-		e.sendResult(ws, &proto.CmdResult{Type: proto.TypeCmdResult, CmdID: cmd.CmdID, CmdSeq: cmd.CmdSeq,
-			OK: false, Error: "busy: concurrency limit"})
-		return
-	}
-
+	// 信号量等待在 handler goroutine 内进行——读循环永不阻塞（否则心跳停摆、
+	// 服务端 90s 判超时断连，指令延迟到重连才被取走）
 	e.wg.Add(1)
 	go func() {
-		defer func() { <-e.sem; e.wg.Done() }()
+		defer func() { e.wg.Done() }()
+		select {
+		case e.sem <- struct{}{}:
+		case <-time.After(10 * time.Minute):
+			e.sendResult(ws, &proto.CmdResult{Type: proto.TypeCmdResult, CmdID: cmd.CmdID, CmdSeq: cmd.CmdSeq,
+				OK: false, Error: "busy: concurrency limit"})
+			return
+		}
+		defer func() { <-e.sem }()
 		defer func() {
 			if r := recover(); r != nil {
 				e.Log.Error("handler panic", "cmd_id", cmd.CmdID, "panic", r)
@@ -335,8 +337,7 @@ func (e *Engine) sendResult(ws *websocket.Conn, res *proto.CmdResult) {
 		_ = os.MkdirAll(e.Home.SpoolDir(), 0o700)
 		_ = os.WriteFile(spoolPath, b, 0o600)
 	}
-	_ = ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	if werr := ws.WriteMessage(websocket.TextMessage, b); werr == nil {
+	if werr := e.writeWS(ws, b); werr == nil {
 		_ = os.Remove(spoolPath)
 	} else {
 		e.Log.Warn("result send failed, kept in spool", "cmd_id", res.CmdID, "err", werr)
@@ -361,8 +362,7 @@ func (e *Engine) flushSpool(ws *websocket.Conn) {
 		if err != nil {
 			continue
 		}
-		_ = ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if err := ws.WriteMessage(websocket.TextMessage, b); err != nil {
+		if err := e.writeWS(ws, b); err != nil {
 			return // 连接坏了，留给下次
 		}
 		_ = os.Remove(filepath.Join(e.Home.SpoolDir(), name))
@@ -456,6 +456,14 @@ func (e *Engine) renewLoop(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// writeWS 串行化的 ws 文本帧写入（gorilla 禁止并发写，§D14 附注）。
+func (e *Engine) writeWS(ws *websocket.Conn, b []byte) error {
+	e.wsMu.Lock()
+	defer e.wsMu.Unlock()
+	_ = ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	return ws.WriteMessage(websocket.TextMessage, b)
 }
 
 func min(a, b time.Duration) time.Duration {

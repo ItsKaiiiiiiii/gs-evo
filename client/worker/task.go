@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 
 	"github.com/ItsKaiiiiiiii/gs-evo/pkg/proto"
 )
@@ -431,8 +430,7 @@ func (e *Engine) sendTaskEvent(ev proto.TaskEvent) {
 	if err != nil {
 		return
 	}
-	_ = ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	_ = ws.WriteMessage(websocket.TextMessage, b) // 写失败仅丢帧，重放兜底
+	_ = e.writeWS(ws, b) // 写失败仅丢帧，events_replay 兜底
 }
 
 // envFor 继承 worker 环境 + 本地 agent_env（"K=V"）+ 任务显式覆盖

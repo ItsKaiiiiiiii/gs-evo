@@ -18,7 +18,7 @@
     if (rep.error) { document.getElementById('rep').textContent = rep.error; return; }
     const d = rep.devices || {}, sk = rep.skills || {}, cm = rep.commands || {};
     document.getElementById('rep').innerHTML = `
-      <p class="muted">生成于 ${App.esc(rep.generated_at || '')}</p>
+      <p class="muted">生成于 ${App.fmtTime(rep.generated_at)}</p>
       <div class="grid2">
         <div class="card"><h3>设备</h3>
           <table>

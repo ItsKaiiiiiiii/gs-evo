@@ -16,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorilla/websocket"
 
 	"github.com/ItsKaiiiiiiii/gs-evo/pkg/proto"
 )
@@ -182,8 +181,7 @@ func (e *Engine) syncRuntimes(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	_ = ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	_ = ws.WriteMessage(websocket.TextMessage, msg)
+	_ = e.writeWS(ws, msg)
 }
 
 // startRuntimeSyncLoop 周期同步（引擎启动时开启一次）。

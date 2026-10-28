@@ -100,7 +100,7 @@
       <div class="card">
         <button class="small" id="dev-back">← 返回列表</button>
         <h3 style="margin-top:10px">${App.esc(d.hostname || id)} ${badge(d.status || '')}</h3>
-        <p class="muted">${App.esc(d.os)}/${App.esc(d.arch)} · worker ${App.esc(d.worker_version || '-')} · 最后在线 ${App.esc(d.last_seen || '-')}</p>
+        <p class="muted">${App.esc(d.os)}/${App.esc(d.arch)} · worker ${App.esc(d.worker_version || '-')} · 最后在线 ${App.fmtTime(d.last_seen)}</p>
         <div class="form-row">
           ${App.canWrite() ? `
           <button class="small" id="dev-disconnect">断连</button>

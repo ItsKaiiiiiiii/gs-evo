@@ -523,6 +523,7 @@ func (s *Server) onCmdResult(deviceID string, res *proto.CmdResult) {
 					}
 					if gv, err := s.st.GetVersion(name, ver); err == nil && gv != nil {
 						m["registered"] = true
+						m["cloud_status"] = gv.Status
 						changed = true
 					}
 				}
