@@ -44,25 +44,27 @@ type Config struct {
 }
 
 type Server struct {
-	cfg      Config
-	st       *store.Store
-	verifier *auth.Verifier
-	gw       *gateway.Gateway
-	svc      *skillsvc.Service
-	evo      *evo.Engine
-	log      *slog.Logger
-	privHex  string
-	pubHex   string
-	upgrader websocket.Upgrader
-	httpCli  *http.Client
+	cfg          Config
+	st           *store.Store
+	verifier     *auth.Verifier
+	gw           *gateway.Gateway
+	svc          *skillsvc.Service
+	evo          *evo.Engine
+	log          *slog.Logger
+	privHex      string
+	pubHex       string
+	enrollSecret string // 装机密钥（GSEVO_ENROLL_SECRET；空=开放注册）
+	upgrader     websocket.Upgrader
+	httpCli      *http.Client
 }
 
 func NewServer(cfg Config, st *store.Store, log *slog.Logger) (*Server, error) {
 	s := &Server{
 		cfg: cfg, st: st, log: log,
-		verifier: auth.NewVerifier(st),
-		upgrader: websocket.Upgrader{ReadBufferSize: 4096, WriteBufferSize: 4096},
-		httpCli:  &http.Client{Timeout: 30 * time.Second},
+		enrollSecret: os.Getenv("GSEVO_ENROLL_SECRET"),
+		verifier:     auth.NewVerifier(st),
+		upgrader:     websocket.Upgrader{ReadBufferSize: 4096, WriteBufferSize: 4096},
+		httpCli:      &http.Client{Timeout: 30 * time.Second},
 	}
 	// ed25519 签名密钥：首次启动生成，落 data_dir/keys（§6.6）
 	keysDir := filepath.Join(cfg.DataDir, "keys")
@@ -245,58 +247,84 @@ func readBody[T any](r *http.Request) (*T, error) {
 
 // ---- 设备面 ----
 
-// handleEnroll 一次性 enroll token 换 90 天 device token（§6.7 注册流）。
+// handleEnroll 设备注册：安装时配好云端地址，首次连接云端自动颁发 device token（§6.7，multica 接入思路）。
+// 准入模式（GSEVO_ENROLL_SECRET）：
+//
+//	未设置 → 开放注册（内网/测试场景）；
+//	设置后   → 请求必须携带匹配的 install_secret（装机时预置），否则 401；
+//
+// 一次性 enroll token 流程保留兼容（管理员显式分发场景，label 落设备标签）。
 func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	req, err := readBody[struct {
-		EnrollToken   string `json:"enroll_token"`
+		EnrollToken   string `json:"enroll_token,omitempty"`   // 一次性 token（兼容流程）
+		InstallSecret string `json:"install_secret,omitempty"` // 装机密钥（自动颁发准入）
 		DeviceID      string `json:"device_id"`
 		Hostname      string `json:"hostname"`
 		OS            string `json:"os"`
 		Arch          string `json:"arch"`
 		WorkerVersion string `json:"worker_version"`
 	}](r)
-	if err != nil || req.EnrollToken == "" || req.DeviceID == "" {
-		writeErr(w, http.StatusBadRequest, "enroll_token and device_id required")
+	if err != nil || req.DeviceID == "" || req.Hostname == "" {
+		writeErr(w, http.StatusBadRequest, "device_id and hostname required")
 		return
 	}
-	hash := proto.HashToken(req.EnrollToken)
+
+	var owner string
+	deviceLabels := []string{}
 	token := proto.NewDeviceToken()
 
-	tx, err := s.st.DB.Begin()
-	if err != nil {
-		writeErr(w, 500, err.Error())
-		return
+	if req.EnrollToken != "" && strings.HasPrefix(req.EnrollToken, proto.TokenPrefixEnroll) {
+		// 一次性 enroll token 流（管理员显式分发；label 落设备标签）
+		hash := proto.HashToken(req.EnrollToken)
+		tx, err := s.st.DB.Begin()
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		defer tx.Rollback()
+		et, err := s.st.ConsumeEnrollToken(tx, hash)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		if et == nil {
+			writeErr(w, http.StatusUnauthorized, "invalid or used enroll token")
+			return
+		}
+		owner = et.CreatedBy
+		if et.Label != "" {
+			deviceLabels = append(deviceLabels, et.Label)
+		}
+		if err := tx.Commit(); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	} else if s.enrollSecret != "" {
+		// 自动颁发 + 准入密钥
+		if req.InstallSecret != s.enrollSecret {
+			writeErr(w, http.StatusUnauthorized,
+				"install secret required（云端已开启准入：装机时需配置与云端一致的安装密钥）")
+			return
+		}
+		owner = "auto"
+	} else {
+		// 开放注册
+		owner = "auto"
 	}
-	defer tx.Rollback()
-	et, err := s.st.ConsumeEnrollToken(tx, hash)
-	if err != nil {
-		writeErr(w, 500, err.Error())
-		return
-	}
-	if et == nil {
-		writeErr(w, http.StatusUnauthorized, "invalid or used enroll token")
-		return
-	}
-	deviceLabels := []string{}
-	if et.Label != "" {
-		deviceLabels = append(deviceLabels, et.Label) // enroll token 的 label 落到设备（rollout 圈定用）
-	}
+
 	d := &store.Device{
-		ID: req.DeviceID, Owner: et.CreatedBy,
+		ID: req.DeviceID, Owner: owner,
 		TokenHash: proto.HashToken(token), TokenExpiresAt: time.Now().Add(tokenTTL),
 		Hostname: req.Hostname, OS: req.OS, Arch: req.Arch, WorkerVersion: req.WorkerVersion,
 		Labels: deviceLabels,
 	}
-	isNew, err := s.st.UpsertDeviceOnEnroll(tx, d)
+	isNew, err := s.st.UpsertDeviceOnEnrollAuto(d)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	if err := tx.Commit(); err != nil {
-		writeErr(w, 500, err.Error())
-		return
-	}
-	s.log.Info("device enrolled", "device", req.DeviceID, "hostname", req.Hostname, "new", isNew)
+	s.log.Info("device enrolled", "device", req.DeviceID, "hostname", req.Hostname,
+		"new", isNew, "mode", map[bool]string{true: "enroll-token", false: "auto"}[req.EnrollToken != ""])
 	writeJSON(w, http.StatusOK, map[string]any{
 		"device_token": token, // 明文仅此一次
 		"device_id":    req.DeviceID,

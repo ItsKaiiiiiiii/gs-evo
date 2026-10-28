@@ -76,8 +76,9 @@ func usage() {
 
 commands:
   daemon                       前台运行守护进程
-  login --server URL --enroll TOK
-                               注册本机到云端（TOK 为一次性 enroll token；
+  login --server URL [--enroll TOK] [--install-secret SEC]
+                               注册本机到云端（自动颁发模式：无需 token，
+                               云端开启准入时需 --install-secret 与云端一致；
                                --skills-root 设置 skill 白名单目录，
                                --signing-pubkey 设置安装验签公钥）
   status                       查看本机配置与已装 skill
@@ -90,41 +91,54 @@ commands:
 `)
 }
 
-// cmdLogin enroll 注册流（§6.7）：enroll token → device token → config.toml(0600)。
+// cmdLogin 设备注册（§6.7，multica 接入思路）：首次连接云端自动颁发 device token。
+// 两种模式：--enroll（一次性 token，兼容流程）或自动颁发（装机密钥/开放注册）。
 func cmdLogin(home worker.Home, args []string) error {
 	fs := flag.NewFlagSet("login", flag.ExitOnError)
 	server := fs.String("server", worker.EnvOr("GS_WORKER_SERVER", "http://127.0.0.1:8080"), "cloud base URL")
-	enroll := fs.String("enroll", "", "enroll token ('-' to read from stdin)")
+	enroll := fs.String("enroll", "", "one-time enroll token（兼容流程；省略 = 自动颁发模式）")
+	installSecret := fs.String("install-secret", worker.EnvOr("GS_WORKER_INSTALL_SECRET", ""), "装机密钥（云端开启 GSEVO_ENROLL_SECRET 准入时必填）")
 	pubkey := fs.String("signing-pubkey", worker.EnvOr("GS_WORKER_SIGNING_PUBKEY", ""), "ed25519 signing pubkey hex")
 	_ = pubkey // 由下方 cfg 引用
-	root := fs.String("skills-root", worker.EnvOr("GS_WORKER_SKILLS_ROOT", worker.DefaultSkillsRoot()), "whitelisted skills dir (repeatable not supported here)")
+	root := fs.String("skills-root", worker.EnvOr("GS_WORKER_SKILLS_ROOT", worker.DefaultSkillsRoot()), "skill 白名单目录")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *enroll == "" {
-		return fmt.Errorf("--enroll required ('-' reads token from stdin, keeps it out of shell history)")
-	}
-	tok := *enroll
-	if tok == "-" {
-		fmt.Print("enroll token: ")
-		b, err := worker.ReadLineStdin()
-		if err != nil {
-			return err
+	var tok string
+	useEnroll := false
+	if *enroll != "" {
+		useEnroll = true
+		tok = *enroll
+		if tok == "-" {
+			fmt.Print("enroll token: ")
+			b, err := worker.ReadLineStdin()
+			if err != nil {
+				return err
+			}
+			tok = strings.TrimSpace(b)
 		}
-		tok = strings.TrimSpace(b)
-	}
-	if !strings.HasPrefix(tok, proto.TokenPrefixEnroll) {
-		return fmt.Errorf("token does not look like an enroll token (%s…)", proto.TokenPrefixEnroll)
+		if !strings.HasPrefix(tok, proto.TokenPrefixEnroll) {
+			return fmt.Errorf("token does not look like an enroll token (%s…)", proto.TokenPrefixEnroll)
+		}
 	}
 	deviceID, hadID := home.LoadDeviceID()
 	if !hadID {
 		deviceID = proto.NewDeviceID()
 	}
 	host, _ := os.Hostname()
-	body, _ := json.Marshal(map[string]string{
-		"enroll_token": tok, "device_id": deviceID,
-		"hostname": host, "os": runtime.GOOS, "arch": runtime.GOARCH, "worker_version": worker.WorkerVersion,
-	})
+	payload := map[string]string{
+		"device_id":      deviceID,
+		"hostname":       host,
+		"os":             runtime.GOOS,
+		"arch":           runtime.GOARCH,
+		"worker_version": worker.WorkerVersion,
+	}
+	if useEnroll {
+		payload["enroll_token"] = tok
+	} else if sec := *installSecret; sec != "" {
+		payload["install_secret"] = sec
+	}
+	body, _ := json.Marshal(payload)
 	resp, err := worker.HTTPPostJSON(*server+"/api/v1/devices/enroll", body)
 	if err != nil {
 		return err

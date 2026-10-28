@@ -25,6 +25,20 @@ type Device struct {
 	CreatedAt       time.Time
 }
 
+// UpsertDeviceOnEnrollAuto 非事务包装（自动颁发路径，api 直接调用）。
+func (s *Store) UpsertDeviceOnEnrollAuto(d *Device) (isNew bool, err error) {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	isNew, err = s.UpsertDeviceOnEnroll(tx, d)
+	if err != nil {
+		return false, err
+	}
+	return isNew, tx.Commit()
+}
+
 func (s *Store) UpsertDeviceOnEnroll(tx *sql.Tx, d *Device) (isNew bool, err error) {
 	var exists string
 	err = tx.QueryRow(`SELECT id FROM device WHERE id=?`, d.ID).Scan(&exists)
