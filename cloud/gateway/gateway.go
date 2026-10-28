@@ -150,7 +150,11 @@ func (g *Gateway) handleFrame(c *conn, raw []byte) bool {
 		var sync proto.RuntimeSyncMsg
 		if err := json.Unmarshal(raw, &sync); err == nil {
 			for _, rt := range sync.Runtimes {
-				_ = g.store.UpsertRuntime(c.deviceID, rt, "probed")
+				source := rt.Source
+				if source == "" {
+					source = "probed"
+				}
+				_ = g.store.UpsertRuntime(c.deviceID, rt, source)
 			}
 		}
 	case proto.TypeKick:
@@ -167,7 +171,11 @@ func (g *Gateway) handleHello(c *conn, raw []byte) {
 		_ = g.store.UpdateRuntime(c.deviceID, h.Device.Hostname, h.Device.OS, h.Device.Arch, h.Device.WorkerVersion, agentsJSON)
 		g.log.Info("hello runtimes received", "device", c.deviceID, "count", len(h.Runtimes))
 		for _, rt := range h.Runtimes {
-			if err := g.store.UpsertRuntime(c.deviceID, rt, "probed"); err != nil {
+			source := rt.Source
+			if source == "" {
+				source = "probed"
+			}
+			if err := g.store.UpsertRuntime(c.deviceID, rt, source); err != nil {
 				g.log.Warn("runtime upsert failed", "device", c.deviceID, "runtime", rt.RuntimeID, "err", err)
 			}
 		}

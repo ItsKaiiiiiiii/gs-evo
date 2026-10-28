@@ -53,6 +53,8 @@
       });
     }
 
+    let runtimeNotice = ''; // 运行时登记结果（跨重渲染保留）
+
     // ---- 设备详情：装机清单 / 指令历史 / 任务历史 ----
     async function detail(id) {
       const view = document.getElementById('dev-view');
@@ -63,8 +65,8 @@
         API.get(`${API_}/devices`),
         API.get(`${API_}/devices/${id}/installs`).catch(() => []),
         API.get(`${API_}/devices/${id}/runtimes`).catch(() => []),
-        API.get(`${API_}/commands?device_id=${id}&limit=50`),
-        API.get(`${API_}/tasks?device_id=${id}&limit=50`),
+        API.get(`${API_}/commands?device_id=${id}&limit=50`).catch(() => null),
+        API.get(`${API_}/tasks?device_id=${id}&limit=50`).catch(() => null),
       ]);
       const d = devs.find(x => x.id === id) || {};
 
@@ -75,7 +77,9 @@
         <td>${App.esc((i.installed_at || '').replace('T', ' ').slice(0, 19))}</td></tr>`).join('') ||
         '<tr><td colspan="4" class="muted">无装机记录</td></tr>';
 
-      const cmdRows = (cmds || []).map(cmd => `<tr>
+      const cmdRows = (cmds === null)
+        ? '<tr><td colspan="5" class="muted">无权限查看指令历史（需要 admin token）</td></tr>'
+        : (cmds || []).map(cmd => `<tr>
         <td>${App.esc((cmd.issued_at || '').replace('T', ' ').slice(0, 19))}</td>
         <td>${App.esc(cmd.cmd_type)}</td>
         <td>${cmd.status === 'acked' ? (cmd.result && cmd.result.ok === false ? '<span class="badge red">失败</span>' : '<span class="badge green">成功</span>') : statusCmd(cmd.status)}</td>
@@ -83,7 +87,9 @@
         <td title="${App.esc((cmd.result && cmd.result.error) || '')}">${App.esc((cmd.result && (cmd.result.error || '')) ? String(cmd.result.error).slice(0, 60) : '-')}</td></tr>`).join('') ||
         '<tr><td colspan="5" class="muted">无指令</td></tr>';
 
-      const taskRows = (tasks || []).map(t => `<tr>
+      const taskRows = (tasks === null)
+        ? '<tr><td colspan="4" class="muted">无权限查看任务历史（需要 admin token）</td></tr>'
+        : (tasks || []).map(t => `<tr>
         <td title="${App.esc(t.id)}">${App.esc(t.id.slice(0, 13))}…</td>
         <td title="${App.esc(t.prompt)}">${App.esc(t.prompt.slice(0, 30))}</td>
         <td>${statusBadge(t.status)}</td>
@@ -125,7 +131,7 @@
         <table><tr><th>运行时 ID</th><th>类型</th><th>版本</th><th>状态</th><th>来源</th><th>路径</th></tr>
         ${(runtimes || []).map(r => `<tr>
           <td title="${App.esc(r.runtime_id)}">${App.esc(r.runtime_id.slice(0, 15))}…</td>
-          <td><b>${App.esc(r.type)}</b></td><td>${App.esc(r.version || '-')}</td>
+          <td><b>${App.esc(r.type)}</b></td><td title="${App.esc(r.version || '')}">${App.esc((r.version || '-').length > 24 ? (r.version || '').slice(0, 24) + '…' : (r.version || '-'))}</td>
           <td>${r.ok ? '<span class="badge green">可用</span>' : '<span class="badge red">不可用</span>'}</td>
           <td>${App.esc(r.source)}</td><td title="${App.esc(r.path || '')}">${App.esc((r.path || '-').slice(0, 40))}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">未上报运行时</td></tr>'}
         </table></div>
@@ -136,6 +142,10 @@
       <div class="card"><h3>任务历史</h3>
         <table><tr><th>ID</th><th>Prompt</th><th>状态</th><th>创建时间</th></tr>${taskRows}</table></div>`;
 
+      if (runtimeNotice) {
+        const nEl = document.getElementById('rt-out');
+        if (nEl) nEl.textContent = runtimeNotice;
+      }
       document.getElementById('dev-back').onclick = () => render(view);
       if (App.canWrite()) {
         document.getElementById('dev-disconnect').onclick = async () => {
@@ -170,10 +180,14 @@
                 payload: { type, path, args, env }, ttl_seconds: 120 });
               const r = await API.pollCmd(r0.cmd_id);
               if (r.ok) {
-                outEl.textContent = `已登记：${r.data.runtime_id}（版本探测 ${r.data.ok ? '成功' : '失败'}）`;
+                runtimeNotice = `已登记：${r.data.runtime_id}（版本探测 ${r.data.ok ? '成功' : '失败'}）`;
                 App.toast('运行时已创建并绑定本机');
                 detail(id);
-              } else { outEl.textContent = '登记失败：' + r.error; App.toast('登记失败', true); }
+              } else {
+                runtimeNotice = '登记失败：' + r.error;
+                outEl.textContent = runtimeNotice;
+                App.toast('登记失败', true);
+              }
             } catch (e) { outEl.textContent = e.message; App.toast(e.message, true); }
           };
         }

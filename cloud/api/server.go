@@ -137,7 +137,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/admin/devices", s.authAny(s.handleListDevices))
 	mux.HandleFunc("POST /api/v1/admin/devices/{id}/revoke", s.authAdmin(s.handleRevokeDevice))
 	mux.HandleFunc("POST /api/v1/admin/commands", s.authAdmin(s.handleCreateCommand))
-	mux.HandleFunc("GET /api/v1/admin/commands", s.authAdmin(s.handleListCommands))
+	mux.HandleFunc("GET /api/v1/admin/commands", s.authAny(s.handleListCommands))
 	mux.HandleFunc("GET /api/v1/admin/skills", s.authAdmin(s.handleListSkills))
 	mux.HandleFunc("GET /api/v1/admin/skills/{name}/versions", s.authAdmin(s.handleListVersions))
 	mux.HandleFunc("POST /api/v1/admin/skills/{name}/versions/{version}/status", s.authAdmin(s.handleSetStatus))
@@ -164,7 +164,7 @@ func (s *Server) Routes() http.Handler {
 
 	// 任务面（P2）
 	mux.HandleFunc("POST /api/v1/admin/tasks", s.authAdmin(s.handleCreateTask))
-	mux.HandleFunc("GET /api/v1/admin/tasks", s.authAdmin(s.handleListTasks))
+	mux.HandleFunc("GET /api/v1/admin/tasks", s.authAny(s.handleListTasks))
 	mux.HandleFunc("GET /api/v1/admin/tasks/{id}/events", s.authAdmin(s.handleTaskEvents))
 	mux.HandleFunc("POST /api/v1/admin/tasks/{id}/cancel", s.authAdmin(s.handleTaskCancel))
 	mux.HandleFunc("POST /api/v1/admin/devices/{id}/disconnect", s.authAdmin(s.handleDisconnectDevice))
@@ -505,6 +505,31 @@ func (s *Server) onCmdResult(deviceID string, res *proto.CmdResult) {
 		}
 		if ingest != "" {
 			s.appendCommandResult(cmd.ID, map[string]any{"ingest": ingest})
+		}
+	case proto.CmdSkillsScan:
+		// 富化扫描结果：云端已登记的 skill 打 registered 标（前端区分"新/已登记"）
+		if res.OK && res.Data != nil {
+			if ms, ok := res.Data["manifests"].([]any); ok {
+				changed := false
+				for _, mi := range ms {
+					m, ok2 := mi.(map[string]any)
+					if !ok2 {
+						continue
+					}
+					name, _ := m["name"].(string)
+					ver, _ := m["version"].(string)
+					if name == "" || ver == "" {
+						continue
+					}
+					if gv, err := s.st.GetVersion(name, ver); err == nil && gv != nil {
+						m["registered"] = true
+						changed = true
+					}
+				}
+				if changed {
+					s.appendCommandResult(cmd.ID, map[string]any{"data": res.Data})
+				}
+			}
 		}
 	case proto.CmdSkillsInstall:
 		s.svc.OnInstallResult(deviceID, res)

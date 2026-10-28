@@ -46,7 +46,17 @@ func (e *Engine) probeRuntimeVersion(ctx context.Context, entryType, path string
 	if err != nil {
 		return "", false
 	}
-	return firstLineStr(string(outBytes)), true
+	first := firstLineStr(string(outBytes))
+	// gsagent 协议：首行可能是 hello JSON（{"version":"1",...}）→ 提取 version 字段
+	var probe struct {
+		Version string `json:"version"`
+	}
+	if strings.HasPrefix(strings.TrimSpace(first), "{") {
+		if json.Unmarshal([]byte(first), &probe) == nil && probe.Version != "" {
+			return probe.Version, true
+		}
+	}
+	return first, true
 }
 
 // buildRuntimes 汇总当前运行时列表：registered（state 持久）∪ probed（探测派生）。
@@ -73,7 +83,7 @@ func (e *Engine) buildRuntimes(ctx context.Context) []proto.RuntimeInfo {
 			}
 		}
 		seen[id] = true
-		out = append(out, proto.RuntimeInfo{RuntimeID: id, Type: r.Type, Version: version, Path: r.Path, OK: ok})
+		out = append(out, proto.RuntimeInfo{RuntimeID: id, Type: r.Type, Version: version, Path: r.Path, OK: ok, Source: "registered"})
 	}
 
 	// probed：探测到的本机 agent（claude-code 等）
@@ -83,7 +93,7 @@ func (e *Engine) buildRuntimes(ctx context.Context) []proto.RuntimeInfo {
 			continue
 		}
 		seen[id] = true
-		out = append(out, proto.RuntimeInfo{RuntimeID: id, Type: a.Type, Version: a.Version, Path: a.Path, OK: a.OK})
+		out = append(out, proto.RuntimeInfo{RuntimeID: id, Type: a.Type, Version: a.Version, Path: a.Path, OK: a.OK, Source: "probed"})
 	}
 
 	// 配置的 agent_path = 自带 agent（gsagent 内部协议）→ 派生为运行时
@@ -92,7 +102,7 @@ func (e *Engine) buildRuntimes(ctx context.Context) []proto.RuntimeInfo {
 		if !seen[id] {
 			version, ok := e.probeRuntimeVersion(ctx, "gsagent", e.Cfg.AgentPath, nil)
 			out = append(out, proto.RuntimeInfo{RuntimeID: id, Type: "gsagent",
-				Version: version, Path: e.Cfg.AgentPath, OK: ok})
+				Version: version, Path: e.Cfg.AgentPath, OK: ok, Source: "probed"})
 		}
 	}
 	return out

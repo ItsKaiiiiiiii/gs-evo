@@ -100,7 +100,7 @@
             <td><b>${App.esc(m.name)}</b></td>
             <td>v${App.esc(m.version)}</td>
             <td>${App.esc(m.summary || '')}</td>
-            <td>${m.local_state === 'modified' ? '<span class="badge yellow">本地有改动</span>' : m.local_state === 'clean' ? '<span class="badge green">clean</span>' : '<span class="badge blue">新</span>'}</td>
+            <td>${m.registered ? '<span class="badge blue">已登记</span> ' : ''}${m.local_state === 'modified' ? '<span class="badge yellow">本地有改动</span>' : m.local_state === 'clean' ? '<span class="badge green">clean</span>' : '<span class="badge gray">新</span>'}</td>
             <td><button class="small primary" data-collect="${App.esc(m.name)}">获取</button></td>
           </tr>`).join('')}
           <tr><td colspan="5"><button class="small" data-collect-all>全部获取</button></td></tr>
@@ -128,9 +128,12 @@
       for (const n of names) {
         let r = null;
         try { r = await runCmd('skills.collect', { name: n }, '获取 ' + n + '…'); } catch (e) { App.toast(e.message, true); }
-        results.push({ name: n, r: r });
+        let note = '❌';
+        if (r && r.ok) note = (r.envelope.ingest === 'unchanged') ? '内容无变化' : '✅ 已登记';
+        else if (r) note = '❌ ' + (r.error || '');
+        results.push({ name: n, note: note });
       }
-      const line = results.map(x => x.name + ': ' + (x.r && x.r.ok ? '✅' : '❌')).join('  ');
+      const line = results.map(x => x.name + ': ' + x.note).join('  ');
       setBusy('全部获取完成 → ' + line + '（去「Skill」页审阅发布）');
     }
 
@@ -150,7 +153,7 @@
         try {
           const r = await runCmd('agent.probe', {}, '探测 agent');
           const agents = r.data.agents || [];
-          setBusy('探测完成');
+          setBusy('探测完成（仅覆盖内置 agent 类型；已登记的运行时见「设备」详情）');
           out().innerHTML = `<table><tr><th>类型</th><th>状态</th><th>版本</th><th>路径</th></tr>
             ${agents.map(a => `<tr><td>${App.esc(a.type)}</td><td>${a.ok ? '<span class="badge green">ok</span>' : '<span class="badge gray">未安装</span>'}</td><td>${App.esc(a.version || '-')}</td><td>${App.esc(a.path || '-')}</td></tr>`).join('')}
           </table>`;
@@ -208,7 +211,7 @@
         const cancelBtn = document.getElementById('t-cancel');
         if (cancelBtn) cancelBtn.onclick = async () => {
           if (!confirm('取消该任务？（将终止设备上的 agent 进程树）')) return;
-          try { await API.post(API_ + '/tasks/' + taskID + '/cancel'); App.toast('已请求取消'); draw(); } catch (e) { App.toast(e.message, true); }
+          try { await API.post(API_ + '/tasks/' + taskID + '/cancel'); App.toast('已请求取消'); draw(); refresh(); } catch (e) { App.toast(e.message, true); }
         };
       }
       await draw();

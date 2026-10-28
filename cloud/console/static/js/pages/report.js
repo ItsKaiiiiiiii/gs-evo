@@ -1,5 +1,6 @@
 // report.js：总览（着陆页）——回答"系统健康吗"，并承载数据之外的运营入口。
 (function () {
+  const API_ = '/api/v1/admin';
   async function render(c) {
     c.innerHTML = `<div class="page-title">总览</div><div class="card" id="rep">加载中…</div>
     <div class="card" id="upd-card">

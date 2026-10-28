@@ -99,6 +99,7 @@ type RuntimeInfo struct {
 	Version   string `json:"version,omitempty"`
 	Path      string `json:"path,omitempty"`
 	OK        bool   `json:"ok"`
+	Source    string `json:"source,omitempty"` // probed | registered
 }
 
 // RuntimeSyncMsg c→cloud 运行时列表同步。
