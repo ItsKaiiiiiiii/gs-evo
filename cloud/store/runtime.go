@@ -9,23 +9,30 @@ import (
 
 // Runtime 运行时（本机 agent 实例一等实体，设备 1→N）。
 type RuntimeRow struct {
-	ID       string `json:"runtime_id"`
-	DeviceID string `json:"device_id"`
-	Type     string `json:"type"`
-	Version  string `json:"version,omitempty"`
-	Path     string `json:"path,omitempty"`
-	OK       bool   `json:"ok"`
-	Source   string `json:"source"` // probed | registered
-	LastSeen string `json:"last_seen"`
+	ID        string `json:"runtime_id"`
+	DeviceID  string `json:"device_id"`
+	Type      string `json:"type"`
+	Version   string `json:"version,omitempty"`
+	Path      string `json:"path,omitempty"`
+	Workspace string `json:"workspace,omitempty"`
+	OK        bool   `json:"ok"`
+	Source    string `json:"source"` // probed | registered
+	LastSeen  string `json:"last_seen"`
 }
 
 // UpsertRuntime worker 上报的运行时 upsert（hello / runtime.sync）。
 func (s *Store) UpsertRuntime(deviceID string, rt proto.RuntimeInfo, source string) error {
-	_, err := s.DB.Exec(`INSERT INTO runtime (id, device_id, type, version, path, ok, source, last_seen)
-		VALUES (?,?,?,?,?,?,?,NOW(3))
+	_, err := s.DB.Exec(`INSERT INTO runtime (id, device_id, type, version, path, workspace, ok, source, last_seen)
+		VALUES (?,?,?,?,?,?,?,?,NOW(3))
 		ON DUPLICATE KEY UPDATE type=VALUES(type), version=VALUES(version), path=VALUES(path),
-		ok=VALUES(ok), source=VALUES(source), last_seen=NOW(3)`,
-		rt.RuntimeID, deviceID, rt.Type, rt.Version, rt.Path, rt.OK, source)
+		workspace=VALUES(workspace), ok=VALUES(ok), source=VALUES(source), last_seen=NOW(3)`,
+		rt.RuntimeID, deviceID, rt.Type, rt.Version, rt.Path, rt.Workspace, rt.OK, source)
+	return err
+}
+
+// DeleteRuntime 运行时删除（生命周期管理）。
+func (s *Store) DeleteRuntime(deviceID, runtimeID string) error {
+	_, err := s.DB.Exec(`DELETE FROM runtime WHERE device_id=? AND id=?`, deviceID, runtimeID)
 	return err
 }
 
@@ -40,7 +47,7 @@ type RuntimeWithDevice struct {
 // ListRuntimes 全局运行时列表（跨设备，join 设备主机名）。
 func (s *Store) ListRuntimes() ([]*RuntimeWithDevice, error) {
 	rows, err := s.DB.Query(`SELECT r.id, r.device_id, r.type, COALESCE(r.version,''), COALESCE(r.path,''),
-		r.ok, r.source, DATE_FORMAT(r.last_seen, '%Y-%m-%dT%H:%i:%sZ'),
+		COALESCE(r.workspace,''), r.ok, r.source, DATE_FORMAT(r.last_seen, '%Y-%m-%dT%H:%i:%sZ'),
 		d.hostname, d.status, COALESCE(d.labels, JSON_ARRAY())
 		FROM runtime r JOIN device d ON d.id=r.device_id
 		ORDER BY d.hostname, r.type`)
@@ -52,7 +59,7 @@ func (s *Store) ListRuntimes() ([]*RuntimeWithDevice, error) {
 	for rows.Next() {
 		r := new(RuntimeWithDevice)
 		var labelsRaw []byte
-		if err := rows.Scan(&r.ID, &r.DeviceID, &r.Type, &r.Version, &r.Path, &r.OK, &r.Source,
+		if err := rows.Scan(&r.ID, &r.DeviceID, &r.Type, &r.Version, &r.Path, &r.Workspace, &r.OK, &r.Source,
 			&r.LastSeen, &r.Hostname, &r.DevStatus, &labelsRaw); err != nil {
 			return nil, err
 		}
@@ -79,9 +86,13 @@ func (s *Store) GetRuntime(deviceID, runtimeID string) (*RuntimeRow, error) {
 }
 
 func (s *Store) ListRuntimesByDevice(deviceID string) ([]*RuntimeRow, error) {
-	rows, err := s.DB.Query(`SELECT id, device_id, type, COALESCE(version,''), COALESCE(path,''),
-		ok, source, DATE_FORMAT(last_seen, '%Y-%m-%dT%H:%i:%sZ') FROM runtime
-		WHERE device_id=? ORDER BY type, id`, deviceID)
+	return s.listRuntimes("WHERE r.device_id=?", deviceID)
+}
+
+func (s *Store) listRuntimes(where string, arg any) ([]*RuntimeRow, error) {
+	rows, err := s.DB.Query(`SELECT r.id, r.device_id, r.type, COALESCE(r.version,''), COALESCE(r.path,''),
+		COALESCE(r.workspace,''), r.ok, r.source, DATE_FORMAT(r.last_seen, '%Y-%m-%dT%H:%i:%sZ')
+		FROM runtime r `+where+` ORDER BY r.type, r.id`, arg)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +100,7 @@ func (s *Store) ListRuntimesByDevice(deviceID string) ([]*RuntimeRow, error) {
 	out := []*RuntimeRow{}
 	for rows.Next() {
 		r := new(RuntimeRow)
-		if err := rows.Scan(&r.ID, &r.DeviceID, &r.Type, &r.Version, &r.Path, &r.OK, &r.Source, &r.LastSeen); err != nil {
+		if err := rows.Scan(&r.ID, &r.DeviceID, &r.Type, &r.Version, &r.Path, &r.Workspace, &r.OK, &r.Source, &r.LastSeen); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

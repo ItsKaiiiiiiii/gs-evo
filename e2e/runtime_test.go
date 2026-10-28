@@ -51,6 +51,7 @@ func TestRuntimeLifecycle(t *testing.T) {
 		start := time.Now()
 		b, err := c.admin("GET", "/api/v1/admin/devices/"+devID+"/runtimes", nil)
 		if err != nil {
+			t.Logf("poll ERR: %v", err)
 			return false, err
 		}
 		rts = nil
@@ -131,10 +132,10 @@ func TestRuntimeLifecycle(t *testing.T) {
 		t.Fatal("runtime-assigned task never completed")
 	}
 
-	// 3. runtime.register 受审计创建：合法路径（幂等 upsert 同一 id）
+	// 3. runtime.register 受审计创建：v2 模型只选类型（路径由 worker 在设备 PATH/配置定位）
 	regB, err := c.admin("POST", "/api/v1/admin/commands", map[string]any{
 		"device_id": devID, "cmd_type": "runtime.register", "ttl_seconds": 60,
-		"payload": map[string]any{"type": "gsagent", "path": mockAgentPath},
+		"payload": map[string]any{"type": "gsagent"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -148,10 +149,10 @@ func TestRuntimeLifecycle(t *testing.T) {
 		t.Fatalf("runtime.register failed: %v", row.Result)
 	}
 
-	// 4. 非法路径拒绝（报错可读）
+	// 4. 不支持的类型拒绝（报错可读、列出支持类型）
 	regBad, err := c.admin("POST", "/api/v1/admin/commands", map[string]any{
 		"device_id": devID, "cmd_type": "runtime.register", "ttl_seconds": 60,
-		"payload": map[string]any{"type": "gsagent", "path": "/no/such/bin"},
+		"payload": map[string]any{"type": "no-such-type"},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -172,6 +172,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/admin/devices/{id}/installs", s.authAny(s.handleDeviceInstalls))
 	mux.HandleFunc("GET /api/v1/admin/devices/{id}/runtimes", s.authAny(s.handleDeviceRuntimes))
 	mux.HandleFunc("GET /api/v1/admin/runtimes", s.authAny(s.handleListRuntimes))
+	mux.HandleFunc("GET /api/v1/admin/runtime-types", s.authAny(s.handleRuntimeTypes))
 	mux.HandleFunc("GET /api/v1/admin/skills/{name}/coverage", s.authAny(s.handleSkillCoverage))
 	mux.HandleFunc("GET /api/v1/admin/evaluations", s.authAny(s.handleRecentEvaluations))
 	mux.HandleFunc("GET /api/v1/admin/tokens", s.authAny(s.handleListTokens))
@@ -633,6 +634,11 @@ func (s *Server) handleDeviceInstalls(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, installs)
 }
 
+// handleRuntimeTypes 受支持的运行时类型（创建对话框渲染用）。
+func (s *Server) handleRuntimeTypes(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"types": proto.RuntimeTypes()})
+}
+
 // handleListRuntimes 全局运行时列表（任务/操作页选择器，含设备主机名）。
 func (s *Server) handleListRuntimes(w http.ResponseWriter, r *http.Request) {
 	rts, err := s.st.ListRuntimes()
@@ -793,7 +799,7 @@ func (s *Server) handleCreateCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch req.CmdType {
-	case proto.CmdAgentProbe, proto.CmdSkillsScan, proto.CmdSkillsCollect, proto.CmdTaskEventsReplay, proto.CmdRuntimeRegister:
+	case proto.CmdAgentProbe, proto.CmdSkillsScan, proto.CmdSkillsCollect, proto.CmdTaskEventsReplay, proto.CmdRuntimeRegister, proto.CmdRuntimeRemove:
 	default:
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf(
 			"cmd_type %q not allowed here; allowed: %s, %s, %s, %s, %s（skill 安装请用 skill install，任务请用 task create）",

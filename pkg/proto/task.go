@@ -10,7 +10,8 @@ const (
 )
 
 // 指令类型（P5 运行时）
-const CmdRuntimeRegister = "runtime.register" // 云端要求 worker 登记一个运行时（受审计的"创建"入口）
+const CmdRuntimeRegister = "runtime.register" // 创建运行时（绑定目标设备）
+const CmdRuntimeRemove  = "runtime.remove"  // 删除运行时（生命周期管理） // 云端要求 worker 登记一个运行时（受审计的"创建"入口）
 
 // 事件 kind（内部事件流 → 线上 kind 的映射见 AGENT-PROTOCOL.md §7）。
 const (
@@ -94,10 +95,11 @@ type EventsReplayPayload struct {
 
 // RuntimeInfo 运行时（本机 agent 实例，一等实体）。
 type RuntimeInfo struct {
-	RuntimeID string `json:"runtime_id"` // 稳定身份：derive(type + path)
+	RuntimeID string `json:"runtime_id"` // 稳定身份：derive(type)（绑定设备后唯一）
 	Type      string `json:"type"`
 	Version   string `json:"version,omitempty"`
-	Path      string `json:"path,omitempty"`
+	Path      string `json:"path,omitempty"`      // 解析后的二进制绝对路径
+	Workspace string `json:"workspace,omitempty"` // 专属 workspace（client 目录下）
 	OK        bool   `json:"ok"`
 	Source    string `json:"source,omitempty"` // probed | registered
 }
@@ -106,14 +108,21 @@ type RuntimeInfo struct {
 type RuntimeSyncMsg struct {
 	Type     string        `json:"type"` // "runtime.sync"
 	Runtimes []RuntimeInfo `json:"runtimes"`
+	Removed  []string      `json:"removed,omitempty"` // 已删除的 runtime_id（云端同步删行）
 }
 
-// RuntimeRegisterPayload runtime.register：云端要求 worker 登记运行时（受审计创建）。
+// RuntimeRegisterPayload runtime.register：创建运行时（绑定目标设备）。
+// 无需路径：worker 按类型注册表在设备 PATH 中自动定位二进制，
+// 并在 client 目录下为运行时创建专属 workspace（D14/§6.8）。
 type RuntimeRegisterPayload struct {
-	Type string            `json:"type"` // gsagent | claude-code
-	Path string            `json:"path,omitempty"`
-	Args []string          `json:"args,omitempty"`
-	Env  map[string]string `json:"env,omitempty"`
+	Type string   `json:"type"`           // 受支持类型（claude-code | qodercn | gsagent）
+	Args []string `json:"args,omitempty"` // 类型相关启动参数
+	Path string   `json:"path,omitempty"` // 高级覆盖：显式二进制路径（控制台不暴露）
+}
+
+// RuntimeRemovePayload runtime.remove：删除运行时（清理 workspace 并上报移除）。
+type RuntimeRemovePayload struct {
+	RuntimeID string `json:"runtime_id"`
 }
 
 // EventsReplayResult cmd_result.data。

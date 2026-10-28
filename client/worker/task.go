@@ -162,7 +162,6 @@ func (e *Engine) handleTaskStart(ctx context.Context, payload map[string]any) (m
 	agentType := p.AgentType
 	binPath := ""
 	var runtimeArgs []string
-	runtimeEnv := map[string]string{}
 	if p.RuntimeID != "" {
 		rt, err := e.resolveRuntime(ctx, p.RuntimeID)
 		if err != nil {
@@ -170,20 +169,13 @@ func (e *Engine) handleTaskStart(ctx context.Context, payload map[string]any) (m
 			return nil, err
 		}
 		agentType = rt.Type
-		binPath = rt.Path
+		binPath = rt.BinPath
 		runtimeArgs = rt.Args
-		for k, v := range rt.Env {
-			runtimeEnv[k] = v
-		}
 	} else if agentType == "" {
 		agentType = e.defaultAgentType()
 	}
-	if binPath == "" {
-		if agentType == "gsagent" || agentType == "mock" {
-			binPath = e.Cfg.AgentPath
-		} else if e.Cfg.AgentPath != "" {
-			binPath = e.Cfg.AgentPath
-		}
+	if binPath == "" && e.Cfg.AgentPath != "" {
+		binPath = e.Cfg.AgentPath
 	}
 
 	cmd, err := e.startAgent(agentType, &startOpts{binPath: binPath, args: runtimeArgs, prompt: p.Prompt, permission: perm})
@@ -192,14 +184,7 @@ func (e *Engine) handleTaskStart(ctx context.Context, payload map[string]any) (m
 		return nil, err
 	}
 	cmd.Dir = workdir
-	mergedEnv := map[string]string{}
-	for k, v := range runtimeEnv {
-		mergedEnv[k] = v
-	}
-	for k, v := range p.Env {
-		mergedEnv[k] = v
-	}
-	cmd.Env = envFor(mergedEnv, e.Cfg.AgentEnv) // runtime env → 任务 env 覆盖 + 本地 agent_env
+	cmd.Env = envFor(p.Env, e.Cfg.AgentEnv) // 任务 env 覆盖 + 本地 agent_env
 	if agentType == "gsagent" || agentType == "mock" {
 		cmd.Args = append(cmd.Args, e.Cfg.AgentArgs...)
 	}

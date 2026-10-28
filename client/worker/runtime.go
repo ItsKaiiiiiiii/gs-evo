@@ -1,8 +1,9 @@
 package worker
 
-// 运行时（Runtime）：本机 agent 实例的一等实体（参考 multica 的 runtime 概念，
-// 采纳其"本地发现注册 + 云端指派"；"创建"收敛为受审计的 runtime.register 指令）。
-// 设计见 docs/DESIGN.md §6.8 / D14。
+// 运行时（Runtime）：本机 agent 实例的一等实体（multica 产品思路）。
+// 创建 = 用户选类型（不填路径）：worker 按类型注册表在设备 PATH 中定位二进制，
+// 在 client 目录下建专属 workspace，做连通性自检后登记上报（D14/§6.8）。
+// 生命周期：create（runtime.register）/ remove（runtime.remove）/ 状态同步（runtime.sync）。
 
 import (
 	"context"
@@ -13,43 +14,27 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/ItsKaiiiiiiii/gs-evo/pkg/proto"
 )
 
-const runtimeSyncInterval = 5 * time.Minute
-
-// RuntimeEntry 本机运行时登记（registered 来源持久化在 state.json；probed 每次探测派生）。
-type RuntimeEntry struct {
-	Type   string            `json:"type"`
-	Path   string            `json:"path,omitempty"`
-	Args   []string          `json:"args,omitempty"`
-	Env    map[string]string `json:"env,omitempty"`
-	Source string            `json:"source"` // probed | registered
-}
-
-// RuntimeID 稳定身份：derive(type + path)——重装/重启不变。
-func RuntimeID(entryType, path string) string {
-	sum := sha256.Sum256([]byte(entryType + "|" + path))
-	return "rt-" + hex.EncodeToString(sum[:])[:16]
-}
-
-// probeRuntimeVersion 探测运行时版本（--version，5s 超时）。
-func (e *Engine) probeRuntimeVersion(ctx context.Context, entryType, path string, args []string) (string, bool) {
+// probeRuntimeVersion 连通性自检：运行 --version 探测版本（5s 超时）。
+// gsagent 协议的首行可能是 hello JSON（{"version":"1",...}）→ 提取 version 字段。
+func (e *Engine) probeRuntimeVersion(ctx context.Context, rtType, binPath string, args []string) (string, bool) {
 	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	outBytes, err := exec.CommandContext(cctx, path, append(args, "--version")...).Output()
+	outBytes, err := exec.CommandContext(cctx, binPath, append(args, "--version")...).Output()
 	if err != nil {
 		return "", false
 	}
 	first := firstLineStr(string(outBytes))
-	// gsagent 协议：首行可能是 hello JSON（{"version":"1",...}）→ 提取 version 字段
-	var probe struct {
-		Version string `json:"version"`
-	}
 	if strings.HasPrefix(strings.TrimSpace(first), "{") {
+		var probe struct {
+			Version string `json:"version"`
+		}
 		if json.Unmarshal([]byte(first), &probe) == nil && probe.Version != "" {
 			return probe.Version, true
 		}
@@ -57,7 +42,47 @@ func (e *Engine) probeRuntimeVersion(ctx context.Context, entryType, path string
 	return first, true
 }
 
-// buildRuntimes 汇总当前运行时列表：registered（state 持久）∪ probed（探测派生）。
+const runtimeSyncInterval = 5 * time.Minute
+
+// RuntimeEntry 本机运行时登记（registered 持久化在 state.json；probed 探测派生）。
+type RuntimeEntry struct {
+	Type      string   `json:"type"`
+	BinPath   string   `json:"bin_path,omitempty"` // 解析出的二进制绝对路径
+	Workspace string   `json:"workspace,omitempty"`
+	Args      []string `json:"args,omitempty"`
+	Source    string   `json:"source"` // probed | registered
+}
+
+// RuntimeID 稳定身份：derive(type)——绑定设备后，每类型一个运行时实例。
+func RuntimeID(entryType string) string {
+	sum := sha256.Sum256([]byte("runtime-type:" + entryType))
+	return "rt-" + hex.EncodeToString(sum[:])[:16]
+}
+
+func (e *Engine) runtimeWorkspace(rtID string) string {
+	return filepath.Join(e.Home.Dir, "runtimes", rtID)
+}
+
+// resolveBinary 按类型定位二进制：显式 AgentPath（gsagent）→ 注册表 Binaries 依次 LookPath。
+func (e *Engine) resolveBinary(rtType string) (string, error) {
+	if rtType == "gsagent" || rtType == "mock" {
+		if e.Cfg.AgentPath != "" {
+			return e.Cfg.AgentPath, nil
+		}
+	}
+	for _, name := range proto.BinariesFor(rtType) {
+		if p, err := exec.LookPath(name); err == nil {
+			return p, nil
+		}
+	}
+	if e.Cfg.AgentPath != "" {
+		return e.Cfg.AgentPath, nil
+	}
+	return "", fmt.Errorf("设备上未找到 %s 的可执行文件（尝试: %s）——请先在设备上安装，或将二进制放入 PATH",
+		rtType, strings.Join(proto.BinariesFor(rtType), "/"))
+}
+
+// buildRuntimes 汇总运行时列表：registered（state 持久）∪ probed（探测派生，type 身份）。
 func (e *Engine) buildRuntimes(ctx context.Context) []proto.RuntimeInfo {
 	e.mu.Lock()
 	registered := map[string]RuntimeEntry{}
@@ -69,34 +94,34 @@ func (e *Engine) buildRuntimes(ctx context.Context) []proto.RuntimeInfo {
 	seen := map[string]bool{}
 	var out []proto.RuntimeInfo
 
-	// registered 优先（显式登记的身份与参数）
 	for id, r := range registered {
 		ok := true
 		version := ""
-		if r.Path != "" {
-			if _, err := os.Stat(r.Path); err == nil {
-				version, ok = e.probeRuntimeVersion(ctx, r.Type, r.Path, r.Args)
+		if r.BinPath != "" {
+			if _, err := os.Stat(r.BinPath); err == nil {
+				version, ok = e.probeRuntimeVersion(ctx, r.Type, r.BinPath, r.Args)
 			} else {
 				ok = false
 			}
 		}
 		seen[id] = true
-		out = append(out, proto.RuntimeInfo{RuntimeID: id, Type: r.Type, Version: version, Path: r.Path, OK: ok, Source: "registered"})
+		out = append(out, proto.RuntimeInfo{RuntimeID: id, Type: r.Type, Version: version,
+			Path: r.BinPath, Workspace: r.Workspace, OK: ok, Source: "registered"})
 	}
 
-	// probed：探测到的本机 agent（claude-code 等）
 	for _, a := range e.ProbeAgents(ctx) {
-		id := RuntimeID(a.Type, a.Path)
+		id := RuntimeID(a.Type)
 		if seen[id] {
 			continue
 		}
 		seen[id] = true
-		out = append(out, proto.RuntimeInfo{RuntimeID: id, Type: a.Type, Version: a.Version, Path: a.Path, OK: a.OK, Source: "probed"})
+		out = append(out, proto.RuntimeInfo{RuntimeID: id, Type: a.Type, Version: a.Version,
+			Path: a.Path, OK: a.OK, Source: "probed"})
 	}
 
 	// 配置的 agent_path = 自带 agent（gsagent 内部协议）→ 派生为运行时
 	if e.Cfg.AgentPath != "" {
-		id := RuntimeID("gsagent", e.Cfg.AgentPath)
+		id := RuntimeID("gsagent")
 		if !seen[id] {
 			version, ok := e.probeRuntimeVersion(ctx, "gsagent", e.Cfg.AgentPath, nil)
 			out = append(out, proto.RuntimeInfo{RuntimeID: id, Type: "gsagent",
@@ -106,12 +131,8 @@ func (e *Engine) buildRuntimes(ctx context.Context) []proto.RuntimeInfo {
 	return out
 }
 
-// resolveRuntime 任务指派解析：runtime_id 精确匹配 → 供货类型/路径/参数/环境。
-// 未指定 runtime_id 时返回零值（由 agent_type / 默认探测决定）。
+// resolveRuntime 任务指派解析：runtime_id → 运行时（供货类型/二进制/参数）。
 func (e *Engine) resolveRuntime(ctx context.Context, runtimeID string) (RuntimeEntry, error) {
-	if runtimeID == "" {
-		return RuntimeEntry{}, nil
-	}
 	e.mu.Lock()
 	reg, okReg := e.State.Runtimes[runtimeID]
 	e.mu.Unlock()
@@ -122,7 +143,7 @@ func (e *Engine) resolveRuntime(ctx context.Context, runtimeID string) (RuntimeE
 	rts := e.buildRuntimes(ctx)
 	for _, rt := range rts {
 		if rt.RuntimeID == runtimeID {
-			return RuntimeEntry{Type: rt.Type, Path: rt.Path, Source: "probed"}, nil
+			return RuntimeEntry{Type: rt.Type, BinPath: rt.Path, Source: "probed"}, nil
 		}
 	}
 	avail := make([]string, 0, len(rts))
@@ -132,49 +153,92 @@ func (e *Engine) resolveRuntime(ctx context.Context, runtimeID string) (RuntimeE
 	return RuntimeEntry{}, fmt.Errorf("runtime %s not found on this device; available: %v", runtimeID, avail)
 }
 
-// handleRuntimeRegister runtime.register：云端要求登记运行时（受审计创建）。
-// worker 侧校验（二进制存在、可探测版本）后才持久化——云端不直接写用户机器。
+// handleRuntimeRegister runtime.register：创建运行时（选类型即可，不填路径）。
+// 流程：类型校验 → 定位二进制（PATH）→ 建专属 workspace → 连通性自检（版本探测）
+// → 持久化登记（source=registered）→ 立即同步上报在离线状态。
 func (e *Engine) handleRuntimeRegister(ctx context.Context, payload map[string]any) (map[string]any, error) {
 	raw, _ := json.Marshal(payload)
 	var p proto.RuntimeRegisterPayload
 	if err := json.Unmarshal(raw, &p); err != nil || p.Type == "" {
-		return nil, errors.New(`bad runtime.register payload: 需要 {"type":"gsagent|claude-code","path":"...","args":[...],"env":{...}}`)
+		return nil, errors.New(`bad runtime.register payload: 需要 {"type":"claude-code|qodercn|gsagent","args":[...]}`)
 	}
-	if p.Path == "" {
-		return nil, errors.New("path required（填二进制名或绝对路径）")
+	if !proto.IsSupportedRuntimeType(p.Type) {
+		return nil, fmt.Errorf("不支持的运行时类型 %q（当前支持: claude-code, qodercn, gsagent）", p.Type)
 	}
-	// 路径解析：填绝对路径用之；只填二进制名 → 在设备 PATH 中查找（用户无需知道绝对路径）
-	p.Path = strings.TrimSpace(p.Path)
-	if !strings.ContainsAny(p.Path, "/\\") {
-		resolved, err := exec.LookPath(p.Path)
-		if err != nil {
-			return nil, fmt.Errorf("在设备 PATH 中找不到 %q——确认已安装，或在设备上执行 which %s 查看绝对路径", p.Path, p.Path)
-		}
-		p.Path = resolved
+
+	rtID := RuntimeID(p.Type)
+	e.mu.Lock()
+	if _, exists := e.State.Runtimes[rtID]; exists {
+		e.mu.Unlock()
+		return nil, fmt.Errorf("runtime %s 已存在（同类型每设备一个实例；如需重建请先删除）", p.Type)
 	}
-	if _, err := os.Stat(p.Path); err != nil {
-		return nil, fmt.Errorf("path 不存在或不可访问: %s", p.Path)
+	e.mu.Unlock()
+
+	binPath, err := e.resolveBinary(p.Type)
+	if err != nil {
+		return nil, err
 	}
-	id := RuntimeID(p.Type, p.Path)
-	version, ok := e.probeRuntimeVersion(ctx, p.Type, p.Path, p.Args)
+
+	// 专属 workspace：client 目录下 runtimes/<rtID>/
+	wsDir := e.runtimeWorkspace(rtID)
+	if err := os.MkdirAll(filepath.Join(wsDir, "work"), 0o755); err != nil {
+		return nil, err
+	}
+
+	// 连通性自检：二进制可执行 + 可探测版本
+	version, ok := e.probeRuntimeVersion(ctx, p.Type, binPath, p.Args)
 
 	e.mu.Lock()
 	if e.State.Runtimes == nil {
 		e.State.Runtimes = map[string]RuntimeEntry{}
 	}
-	e.State.Runtimes[id] = RuntimeEntry{Type: p.Type, Path: p.Path, Args: p.Args, Env: p.Env, Source: "registered"}
+	e.State.Runtimes[rtID] = RuntimeEntry{
+		Type: p.Type, BinPath: binPath, Workspace: wsDir, Args: p.Args, Source: "registered",
+	}
 	e.Home.SaveState(e.State)
 	e.mu.Unlock()
 
 	go e.syncRuntimes(context.Background())
 
-	e.Log.Info("runtime registered", "runtime", id, "type", p.Type, "path", p.Path, "ok", ok)
-	data, _ := structToMap(map[string]any{"runtime_id": id, "type": p.Type, "ok": ok, "version": version})
+	e.Log.Info("runtime created", "runtime", rtID, "type", p.Type, "bin", binPath, "selfcheck", ok)
+	data, _ := structToMap(map[string]any{
+		"runtime_id": rtID, "type": p.Type, "bin": binPath, "version": version,
+		"workspace": wsDir, "status": map[bool]string{true: "online", false: "offline"}[ok],
+	})
 	return data, nil
 }
 
-// syncRuntimes 周期同步运行时列表（变更即发 + 5min 周期兜底）。
+// handleRuntimeRemove runtime.remove：删除运行时（清 workspace + state + 同步移除）。
+func (e *Engine) handleRuntimeRemove(ctx context.Context, payload map[string]any) (map[string]any, error) {
+	raw, _ := json.Marshal(payload)
+	var p proto.RuntimeRemovePayload
+	if err := json.Unmarshal(raw, &p); err != nil || p.RuntimeID == "" {
+		return nil, errors.New("need runtime_id")
+	}
+	e.mu.Lock()
+	rt, exists := e.State.Runtimes[p.RuntimeID]
+	e.mu.Unlock()
+	if !exists {
+		return nil, fmt.Errorf("runtime %s 不存在", p.RuntimeID)
+	}
+	_ = os.RemoveAll(rt.Workspace)
+	e.mu.Lock()
+	delete(e.State.Runtimes, p.RuntimeID)
+	e.Home.SaveState(e.State)
+	e.mu.Unlock()
+
+	go e.syncRuntimesRemoved(context.Background(), p.RuntimeID)
+	e.Log.Info("runtime removed", "runtime", p.RuntimeID)
+	data, _ := structToMap(map[string]any{"removed": p.RuntimeID})
+	return data, nil
+}
+
+// syncRuntimes 周期同步运行时列表。
 func (e *Engine) syncRuntimes(ctx context.Context) {
+	e.syncRuntimesRemoved(ctx)
+}
+
+func (e *Engine) syncRuntimesRemoved(ctx context.Context, removed ...string) {
 	e.mu.Lock()
 	ws := e.currentConn
 	e.mu.Unlock()
@@ -182,10 +246,7 @@ func (e *Engine) syncRuntimes(ctx context.Context) {
 		return
 	}
 	rts := e.buildRuntimes(ctx)
-	if len(rts) == 0 {
-		return
-	}
-	msg, err := json.Marshal(proto.RuntimeSyncMsg{Type: proto.TypeRuntimeSync, Runtimes: rts})
+	msg, err := json.Marshal(proto.RuntimeSyncMsg{Type: proto.TypeRuntimeSync, Runtimes: rts, Removed: removed})
 	if err != nil {
 		return
 	}

@@ -160,37 +160,6 @@
           const labels = document.getElementById('dev-labels').value.split(',').map(x => x.trim()).filter(Boolean);
           try { await API.post(`${API_}/devices/${id}/labels`, { labels }); App.toast('标签已保存'); detail(id); } catch (e) { App.toast(e.message, true); }
         };
-        // 添加运行时（创建即绑定本机）：runtime.register 指令 + 回执等待
-        const addBtn = document.getElementById('rt-add');
-        if (addBtn) {
-          addBtn.onclick = () => document.getElementById('rt-form').classList.toggle('hidden');
-          document.getElementById('rt-create').onclick = async () => {
-            const type = document.getElementById('rt-type').value;
-            const path = document.getElementById('rt-path').value.trim();
-            if (!path) { App.toast('填运行时二进制路径', true); return; }
-            const args = document.getElementById('rt-args').value.split(',').map(x => x.trim()).filter(Boolean);
-            const env = {};
-            document.getElementById('rt-env').value.split(',').map(x => x.trim()).filter(Boolean).forEach(kv => {
-              const [k, ...rest] = kv.split('='); if (k) env[k] = rest.join('=');
-            });
-            const outEl = document.getElementById('rt-out');
-            outEl.textContent = '下发 runtime.register 指令，等待本机校验…';
-            try {
-              const r0 = await API.post(`${API_}/commands`, { device_id: id, cmd_type: 'runtime.register',
-                payload: { type, path, args, env }, ttl_seconds: 120 });
-              const r = await API.pollCmd(r0.cmd_id);
-              if (r.ok) {
-                runtimeNotice = `已登记：${r.data.runtime_id}（版本探测 ${r.data.ok ? '成功' : '失败'}）`;
-                App.toast('运行时已创建并绑定本机');
-                detail(id);
-              } else {
-                runtimeNotice = '登记失败：' + r.error;
-                outEl.textContent = runtimeNotice;
-                App.toast('登记失败', true);
-              }
-            } catch (e) { outEl.textContent = e.message; App.toast(e.message, true); }
-          };
-        }
       }
     }
 

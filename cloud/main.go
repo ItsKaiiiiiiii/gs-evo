@@ -1002,11 +1002,11 @@ func cmdRuntime(args []string) error {
 	sub := args[0]
 	fs := flag.NewFlagSet("runtime", flag.ExitOnError)
 	device := fs.String("device", "", "device id")
-	typ := fs.String("type", "", "runtime type: gsagent|claude-code")
-	path := fs.String("path", "", "runtime binary path")
-	var rtArgs, rtEnv sliceFlags
+	typ := fs.String("type", "", "runtime type: claude-code|qodercn|gsagent")
+	path := fs.String("path", "", "explicit binary path (optional override)")
+	rtID := fs.String("runtime", "", "runtime id")
+	var rtArgs sliceFlags
 	fs.Var(&rtArgs, "arg", "runtime arg (repeatable, comma-separated supported)")
-	fs.Var(&rtEnv, "env", "runtime env K=V (repeatable)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -1021,30 +1021,39 @@ func cmdRuntime(args []string) error {
 		}
 		printJSON(b)
 	case "register":
-		if *device == "" || *typ == "" || *path == "" {
-			return fmt.Errorf("--device --type --path required")
+		if *device == "" || *typ == "" {
+			return fmt.Errorf("--device and --type required")
 		}
 		var argList []string
 		for _, a := range rtArgs {
 			argList = append(argList, strings.Split(a, ",")...)
 		}
-		envMap := map[string]string{}
-		for _, kv := range rtEnv {
-			if k, v, ok := strings.Cut(kv, "="); ok {
-				envMap[k] = v
-			}
+		payload := map[string]any{"type": *typ, "args": argList}
+		if *path != "" {
+			payload["path"] = *path // 高级覆盖（默认由 worker 在设备 PATH 定位）
 		}
 		b, err := adminReq("POST", "/api/v1/admin/commands", map[string]any{
 			"device_id": *device, "cmd_type": "runtime.register",
-			"payload":     map[string]any{"type": *typ, "path": *path, "args": argList, "env": envMap},
-			"ttl_seconds": 120,
+			"payload": payload, "ttl_seconds": 120,
+		})
+		if err != nil {
+			return err
+		}
+		printJSON(b)
+	case "remove":
+		if *device == "" || *rtID == "" {
+			return fmt.Errorf("--device and --runtime required")
+		}
+		b, err := adminReq("POST", "/api/v1/admin/commands", map[string]any{
+			"device_id": *device, "cmd_type": "runtime.remove",
+			"payload": map[string]any{"runtime_id": *rtID}, "ttl_seconds": 120,
 		})
 		if err != nil {
 			return err
 		}
 		printJSON(b)
 	default:
-		return fmt.Errorf("usage: gs-cloud runtime list|register")
+		return fmt.Errorf("usage: gs-cloud runtime list|register|remove")
 	}
 	return nil
 }

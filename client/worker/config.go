@@ -125,6 +125,9 @@ func (h Home) LoadState() *State {
 	if st.Results == nil {
 		st.Results = map[string]ResultRec{}
 	}
+	if st.Runtimes == nil {
+		st.Runtimes = map[string]RuntimeEntry{}
+	}
 	return st
 }
 

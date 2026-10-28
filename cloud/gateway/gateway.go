@@ -156,6 +156,9 @@ func (g *Gateway) handleFrame(c *conn, raw []byte) bool {
 				}
 				_ = g.store.UpsertRuntime(c.deviceID, rt, source)
 			}
+			for _, rid := range sync.Removed {
+				_ = g.store.DeleteRuntime(c.deviceID, rid)
+			}
 		}
 	case proto.TypeKick:
 		// 客户端不会发 kick

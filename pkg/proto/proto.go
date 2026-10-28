@@ -50,7 +50,7 @@ const (
 // SupportedCommands 客户端声明的能力集。
 var SupportedCommands = []string{
 	CmdAgentProbe, CmdSkillsScan, CmdSkillsCollect, CmdSkillsInstall,
-	CmdTaskStart, CmdTaskCancel, CmdTaskEventsReplay, CmdRuntimeRegister,
+	CmdTaskStart, CmdTaskCancel, CmdTaskEventsReplay, CmdRuntimeRegister, CmdRuntimeRemove, CmdRuntimeRemove,
 }
 
 // ---- 基础档案 ----
