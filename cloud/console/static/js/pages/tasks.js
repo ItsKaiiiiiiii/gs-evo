@@ -254,6 +254,7 @@
 
     // ---- 任务列表 ----
     async function refresh() {
+      if (!document.getElementById('t-table')) return; // 页面已切走
       const dev = document.getElementById('t-dev-filter') ? document.getElementById('t-dev-filter').value : '';
       const tasks = await API.get(API_ + '/tasks?device_id=' + dev + '&limit=' + taskLimit).catch(() => []);
       const rows = (tasks || []).map(t => `<tr style="cursor:pointer" data-id="${t.id}" data-dev="${t.device_id}" class="${t.id === expandedTask ? 'active-row' : ''}">
@@ -281,6 +282,7 @@
       const el = document.getElementById('t-detail');
       el.innerHTML = '加载中…';
       async function draw() {
+        if (!document.getElementById('t-detail-card')) return; // 页面已切走
         const events = await API.get(API_ + '/tasks/' + taskID + '/events?limit=500').catch(() => []);
         const evHtml = (events || []).map(e => {
           const t = App.fmtTime(e.ts).slice(11);
