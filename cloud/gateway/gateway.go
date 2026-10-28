@@ -149,16 +149,21 @@ func (g *Gateway) handleFrame(c *conn, raw []byte) bool {
 	case proto.TypeRuntimeSync:
 		var sync proto.RuntimeSyncMsg
 		if err := json.Unmarshal(raw, &sync); err == nil {
+			g.log.Info("runtime.sync received", "device", c.deviceID, "count", len(sync.Runtimes), "removed", len(sync.Removed))
 			for _, rt := range sync.Runtimes {
 				source := rt.Source
 				if source == "" {
 					source = "probed"
 				}
-				_ = g.store.UpsertRuntime(c.deviceID, rt, source)
+				if err := g.store.UpsertRuntime(c.deviceID, rt, source); err != nil {
+					g.log.Warn("runtime upsert failed", "err", err, "rt", rt.RuntimeID)
+				}
 			}
 			for _, rid := range sync.Removed {
 				_ = g.store.DeleteRuntime(c.deviceID, rid)
 			}
+		} else {
+			g.log.Warn("runtime.sync unmarshal failed", "err", err)
 		}
 	case proto.TypeKick:
 		// 客户端不会发 kick

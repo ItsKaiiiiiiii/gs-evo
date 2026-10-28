@@ -82,7 +82,9 @@ func (e *Engine) resolveBinary(rtType string) (string, error) {
 		rtType, strings.Join(proto.BinariesFor(rtType), "/"))
 }
 
-// buildRuntimes 汇总运行时列表：registered（state 持久）∪ probed（探测派生，type 身份）。
+// buildRuntimes 汇总【已创建】的运行时（registered，用户显式创建）。
+// 自动探测到的 agent 不作为运行时上报——运行时是用户创建的资源，不是探测结果。
+// （任务的 agent_type 指派不受影响：ProbeAgents 仍服务于无 runtime_id 的任务。）
 func (e *Engine) buildRuntimes(ctx context.Context) []proto.RuntimeInfo {
 	e.mu.Lock()
 	registered := map[string]RuntimeEntry{}
@@ -91,9 +93,7 @@ func (e *Engine) buildRuntimes(ctx context.Context) []proto.RuntimeInfo {
 	}
 	e.mu.Unlock()
 
-	seen := map[string]bool{}
-	var out []proto.RuntimeInfo
-
+	out := make([]proto.RuntimeInfo, 0, len(registered))
 	for id, r := range registered {
 		ok := true
 		version := ""
@@ -104,29 +104,8 @@ func (e *Engine) buildRuntimes(ctx context.Context) []proto.RuntimeInfo {
 				ok = false
 			}
 		}
-		seen[id] = true
 		out = append(out, proto.RuntimeInfo{RuntimeID: id, Type: r.Type, Version: version,
-			Path: r.BinPath, Workspace: r.Workspace, OK: ok, Source: "registered"})
-	}
-
-	for _, a := range e.ProbeAgents(ctx) {
-		id := RuntimeID(a.Type)
-		if seen[id] {
-			continue
-		}
-		seen[id] = true
-		out = append(out, proto.RuntimeInfo{RuntimeID: id, Type: a.Type, Version: a.Version,
-			Path: a.Path, OK: a.OK, Source: "probed"})
-	}
-
-	// 配置的 agent_path = 自带 agent（gsagent 内部协议）→ 派生为运行时
-	if e.Cfg.AgentPath != "" {
-		id := RuntimeID("gsagent")
-		if !seen[id] {
-			version, ok := e.probeRuntimeVersion(ctx, "gsagent", e.Cfg.AgentPath, nil)
-			out = append(out, proto.RuntimeInfo{RuntimeID: id, Type: "gsagent",
-				Version: version, Path: e.Cfg.AgentPath, OK: ok, Source: "probed"})
-		}
+			Path: r.BinPath, Workspace: r.Workspace, OK: ok, Source: r.Source})
 	}
 	return out
 }
@@ -250,7 +229,10 @@ func (e *Engine) syncRuntimesRemoved(ctx context.Context, removed ...string) {
 	if err != nil {
 		return
 	}
-	_ = e.writeWS(ws, msg)
+	e.Log.Debug("runtime.sync sending", "count", len(rts), "removed", len(removed))
+	if err := e.writeWS(ws, msg); err != nil {
+		e.Log.Warn("runtime.sync send failed", "err", err)
+	}
 }
 
 // startRuntimeSyncLoop 周期同步（引擎启动时开启一次）。

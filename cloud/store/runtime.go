@@ -50,6 +50,7 @@ func (s *Store) ListRuntimes() ([]*RuntimeWithDevice, error) {
 		COALESCE(r.workspace,''), r.ok, r.source, DATE_FORMAT(r.last_seen, '%Y-%m-%dT%H:%i:%sZ'),
 		d.hostname, d.status, COALESCE(d.labels, JSON_ARRAY())
 		FROM runtime r JOIN device d ON d.id=r.device_id
+		WHERE r.source='registered'
 		ORDER BY d.hostname, r.type`)
 	if err != nil {
 		return nil, err
@@ -86,7 +87,7 @@ func (s *Store) GetRuntime(deviceID, runtimeID string) (*RuntimeRow, error) {
 }
 
 func (s *Store) ListRuntimesByDevice(deviceID string) ([]*RuntimeRow, error) {
-	return s.listRuntimes("WHERE r.device_id=?", deviceID)
+	return s.listRuntimes("WHERE r.device_id=? AND r.source='registered'", deviceID)
 }
 
 func (s *Store) listRuntimes(where string, arg any) ([]*RuntimeRow, error) {

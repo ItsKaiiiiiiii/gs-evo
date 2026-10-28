@@ -78,6 +78,7 @@ func NewEngine(h Home, log *slog.Logger) (*Engine, error) {
 	e.register(proto.CmdTaskEventsReplay, e.handleEventsReplay)
 	e.register(proto.CmdClientUpdate, e.handleClientUpdate)
 	e.register(proto.CmdRuntimeRegister, e.handleRuntimeRegister)
+	e.register(proto.CmdRuntimeRemove, e.handleRuntimeRemove)
 	return e, nil
 }
 

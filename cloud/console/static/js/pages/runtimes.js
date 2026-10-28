@@ -20,13 +20,12 @@
   }
 
   async function render(c) {
+    await loadTypes();
     const [devices, runtimes] = await Promise.all([
       API.get(`${API_}/devices`),
       API.get(`${API_}/runtimes`).catch(() => []),
     ]);
-    if (!selectedDevice || !devices.find(d => d.id === selectedDevice)) {
-      selectedDevice = devices.find(d => d.status === 'online') ? (devices.find(d => d.status === 'online')).id : (devices[0] ? devices[0].id : null);
-    }
+    // 不自动选中：添加运行时必须在显式选中设备后出现（依赖关系明确）
 
     const devRows = devices.map(d => {
       const count = (runtimes || []).filter(r => r.device_id === d.id).length;

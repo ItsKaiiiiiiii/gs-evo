@@ -1,31 +1,16 @@
 package e2e
 
-// Runtime（运行时）生命周期 e2e（D14）：
-//	本地发现上报（hello → runtimes 表）→ 任务按 runtime_id 精确指派 →
-//	runtime.register 受审计创建（幂等 + 非法路径拒绝）
+// Runtime（运行时）生命周期 e2e（D14，v2 模型：选类型创建，不填路径）：
+//	创建（worker 定位二进制 + 建 workspace + 连通性自检）→ 同步上报
+//	→ 任务按 runtime_id 精确指派 → 删除（workspace 清理 + 云端移除）
+//	→ 重复创建拒绝 / 不支持类型拒绝（报错可读）
 
 import (
-	"database/sql"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
-
-	_ "github.com/go-sql-driver/mysql"
 )
-
-// gsIDAny 取第一个 gsagent 运行时 id。
-func gsIDAny(rts []struct {
-	RuntimeID string `json:"runtime_id"`
-	Type      string `json:"type"`
-	OK        bool   `json:"ok"`
-}) string {
-	for _, rt := range rts {
-		if rt.Type == "gsagent" {
-			return rt.RuntimeID
-		}
-	}
-	return ""
-}
 
 func TestRuntimeLifecycle(t *testing.T) {
 	c := setupAll(t)
@@ -41,41 +26,41 @@ func TestRuntimeLifecycle(t *testing.T) {
 	})
 	devID := d.id
 
-	// 1. hello 上报运行时（gsagent：来自 agent_path 配置）
+	// 1. 创建运行时（选类型即可；worker 定位二进制 + 建 workspace + 连通性自检）
+	regB, err := c.admin("POST", "/api/v1/admin/commands", map[string]any{
+		"device_id": devID, "cmd_type": "runtime.register", "ttl_seconds": 60,
+		"payload": map[string]any{"type": "gsagent"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reg struct {
+		CmdID string `json:"cmd_id"`
+	}
+	_ = json.Unmarshal(regB, &reg)
+	regRow := c.waitCmd(t, devID, reg.CmdID)
+	if !regRow.dataOfBool() {
+		t.Fatalf("runtime.register failed: %v", regRow.Result)
+	}
+	createdID, _ := regRow.dataOf()["runtime_id"].(string)
+	if createdID == "" {
+		t.Fatalf("no runtime_id in receipt: %v", regRow.Result)
+	}
+
+	// 2. 同步上报：运行时列表出现（registered 来源、ok=true）
 	var rts []struct {
 		RuntimeID string `json:"runtime_id"`
 		Type      string `json:"type"`
 		OK        bool   `json:"ok"`
 	}
-	waitFor(t, 10*time.Second, "runtime reported via hello", func() (bool, error) {
-		start := time.Now()
+	waitFor(t, 10*time.Second, "created runtime reported", func() (bool, error) {
 		b, err := c.admin("GET", "/api/v1/admin/devices/"+devID+"/runtimes", nil)
 		if err != nil {
-			t.Logf("poll ERR: %v", err)
 			return false, err
 		}
 		rts = nil
 		if err := json.Unmarshal(b, &rts); err != nil {
 			return false, err
-		}
-		if len(rts) == 0 {
-			var n, total int
-			_ = sqlExecScan("SELECT COUNT(*) FROM runtime WHERE device_id='"+devID+"'", &n)
-			_ = sqlExecScan("SELECT COUNT(*) FROM runtime", &total)
-			var owners []string
-			db2, _ := sql.Open("mysql", testDSN)
-			rows2, _ := db2.Query("SELECT DISTINCT device_id FROM runtime")
-			if rows2 != nil {
-				for rows2.Next() {
-					var x string
-					_ = rows2.Scan(&x)
-					owners = append(owners, x)
-				}
-				rows2.Close()
-			}
-			db2.Close()
-			t.Logf("poll empty (took %s): api=0 db(device)=%d db(total)=%d owners=%v expect=%s",
-				time.Since(start), n, total, owners, devID)
 		}
 		return len(rts) > 0, nil
 	})
@@ -89,36 +74,9 @@ func TestRuntimeLifecycle(t *testing.T) {
 		t.Fatalf("gsagent runtime not reported: %+v", rts)
 	}
 
-	// 全局运行时列表（任务/操作页选择器数据源）：含设备主机名
-	gb, err := c.admin("GET", "/api/v1/admin/runtimes", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var global []struct {
-		RuntimeID string `json:"runtime_id"`
-		Hostname  string `json:"hostname"`
-	}
-	_ = json.Unmarshal(gb, &global)
-	gFound := false
-	for _, g := range global {
-		if g.RuntimeID == gsIDAny(rts) && g.Hostname != "" {
-			gFound = true
-		}
-	}
-	if !gFound {
-		t.Fatalf("global runtimes missing entry: %+v", global)
-	}
-
-	// 2. 任务按 runtime_id 精确指派
-	var gsID string
-	for _, rt := range rts {
-		if rt.Type == "gsagent" {
-			gsID = rt.RuntimeID
-		}
-	}
-	// 用 runtime_id 精确指派：直接构造带 runtime_id 的 task
-	body := map[string]any{"device_id": devID, "prompt": "hi", "agent_type": "gsagent",
-		"runtime_id": gsID, "timeout_s": 60}
+	// 3. 任务按 runtime_id 精确指派
+	body := map[string]any{"device_id": devID, "prompt": "run on runtime", "agent_type": "gsagent",
+		"runtime_id": createdID, "timeout_s": 60}
 	b, err := c.admin("POST", "/api/v1/admin/tasks", body)
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +90,47 @@ func TestRuntimeLifecycle(t *testing.T) {
 		t.Fatal("runtime-assigned task never completed")
 	}
 
-	// 3. runtime.register 受审计创建：v2 模型只选类型（路径由 worker 在设备 PATH/配置定位）
+	// 4. 生命周期：删除（workspace 清理 + 云端移除）
+	delB, err := c.admin("POST", "/api/v1/admin/commands", map[string]any{
+		"device_id": devID, "cmd_type": "runtime.remove", "ttl_seconds": 60,
+		"payload": map[string]any{"runtime_id": createdID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var del struct {
+		CmdID string `json:"cmd_id"`
+	}
+	_ = json.Unmarshal(delB, &del)
+	delRow := c.waitCmd(t, devID, del.CmdID)
+	if delRow.Status != "acked" || !delRow.dataOfBool() {
+		t.Fatalf("runtime.remove failed: %v", delRow.Result)
+	}
+	waitFor(t, 10*time.Second, "runtime removed from cloud", func() (bool, error) {
+		b, err := c.admin("GET", "/api/v1/admin/devices/"+devID+"/runtimes", nil)
+		if err != nil {
+			return false, err
+		}
+		return len(b) > 0 && !strings.Contains(string(b), createdID), nil
+	})
+}
+
+// 5. 校验路径：重复创建拒绝（同类型每设备一个实例）、不支持类型报错列出支持类型
+func TestRuntimeRegisterValidation(t *testing.T) {
+	c := setupAll(t)
+	d := c.spawnDevice(t, "rt-val-host")
+	if err := taskConfigWithAgent(d.home, c.base, mockAgentPath); err != nil {
+		t.Fatal(err)
+	}
+	d.start(t)
+	defer d.stop()
+	waitFor(t, 15*time.Second, "device online", func() (bool, error) {
+		v := c.deviceByID(t, d.id)
+		return v != nil && v.Status == "online", nil
+	})
+	devID := d.id
+
+	// 创建第一个（成功基线）
 	regB, err := c.admin("POST", "/api/v1/admin/commands", map[string]any{
 		"device_id": devID, "cmd_type": "runtime.register", "ttl_seconds": 60,
 		"payload": map[string]any{"type": "gsagent"},
@@ -144,12 +142,31 @@ func TestRuntimeLifecycle(t *testing.T) {
 		CmdID string `json:"cmd_id"`
 	}
 	_ = json.Unmarshal(regB, &reg)
-	row := c.waitCmd(t, devID, reg.CmdID)
-	if row.Status != "acked" || !row.dataOfBool() {
-		t.Fatalf("runtime.register failed: %v", row.Result)
+	if row := c.waitCmd(t, devID, reg.CmdID); !row.dataOfBool() {
+		t.Fatalf("first register failed: %v", row.Result)
 	}
 
-	// 4. 不支持的类型拒绝（报错可读、列出支持类型）
+	// 重复创建 → 明确报错（不静默覆盖）
+	regDup, err := c.admin("POST", "/api/v1/admin/commands", map[string]any{
+		"device_id": devID, "cmd_type": "runtime.register", "ttl_seconds": 60,
+		"payload": map[string]any{"type": "gsagent"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dup struct {
+		CmdID string `json:"cmd_id"`
+	}
+	_ = json.Unmarshal(regDup, &dup)
+	dupRow := c.waitCmd(t, devID, dup.CmdID)
+	if dupRow.dataOfBool() {
+		t.Fatal("duplicate register must fail")
+	}
+	if errMsg, _ := dupRow.Result["error"].(string); !strings.Contains(errMsg, "已存在") {
+		t.Fatalf("duplicate error unclear: %v", dupRow.Result["error"])
+	}
+
+	// 不支持的类型 → 报错列出支持类型
 	regBad, err := c.admin("POST", "/api/v1/admin/commands", map[string]any{
 		"device_id": devID, "cmd_type": "runtime.register", "ttl_seconds": 60,
 		"payload": map[string]any{"type": "no-such-type"},
@@ -157,12 +174,15 @@ func TestRuntimeLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var regBadID struct {
+	var bad struct {
 		CmdID string `json:"cmd_id"`
 	}
-	_ = json.Unmarshal(regBad, &regBadID)
-	badRow := c.waitCmd(t, devID, regBadID.CmdID)
+	_ = json.Unmarshal(regBad, &bad)
+	badRow := c.waitCmd(t, devID, bad.CmdID)
 	if badRow.dataOfBool() {
-		t.Fatal("register with nonexistent path must fail")
+		t.Fatal("unsupported type must fail")
+	}
+	if errMsg, _ := badRow.Result["error"].(string); !strings.Contains(errMsg, "claude-code") {
+		t.Fatalf("unsupported-type error must list supported types: %v", badRow.Result["error"])
 	}
 }

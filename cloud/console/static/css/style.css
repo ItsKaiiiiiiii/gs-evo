@@ -34,6 +34,7 @@ table { width: 100%; border-collapse: collapse; background: #fff; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eaeef2; font-size: 13px; }
 th { color: #656d76; font-weight: 600; background: #f6f8fa; }
 tr:hover td { background: #f6f8fa; }
+tr.active-row td { background: #ddf4ff; }
 
 button, .btn { padding: 6px 12px; border: 1px solid #d0d7de; border-radius: 6px; background: #f6f8fa; cursor: pointer; font-size: 13px; }
 button:hover { background: #eaeef2; }
